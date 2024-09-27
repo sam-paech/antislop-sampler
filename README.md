@@ -35,8 +35,8 @@ Example format:
 
 ```
 [
-  ["word1", ratio1],
-  ["phrase two", ratio2],
+  ["word1", penalty],
+  ["phrase two", penalty],
   ...
 ]
 ```
@@ -80,7 +80,7 @@ During generation:
 1. **Initialization**:
 
    - Load the language model and tokenizer.
-   - Read the overrepresented words and their ratios.
+   - Read the overrepresented words and their penalties.
    - Prepare token sequences and starting tokens lookup.
 
 2. **Generation Loop**:
@@ -145,7 +145,7 @@ prompt = "Your initial text here."
 ```python
 sampler = AntiSlopGenerator(
     model_name=model_name,
-    word_ratios_file='over_represented_words.json',
+    word_penalties_file='over_represented_words.json',
     max_backtrack=5,
     adjustment_strength=1.0,
     output_every_n_tokens=5,
@@ -166,7 +166,7 @@ sampler = AntiSlopGenerator(
 # Initialize the sampler
 sampler = AntiSlopGenerator(
     model_name=model_name,
-    word_ratios_file='over_represented_words.json',
+    word_penalties_file='over_represented_words.json',
     # ... other parameters
 )
 
