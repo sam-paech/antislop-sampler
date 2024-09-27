@@ -1,4 +1,4 @@
-# AntiSlop Language Model Sampler
+# AntiSlop Sampler
 
 ## Overview
 
