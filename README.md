@@ -2,8 +2,6 @@
 
 ## Overview
 
-* Apologies for the gpt generated readme. This is a temporary state of affairs. *
-
 Try the sampler here: https://colab.research.google.com/drive/11TjqWQCZ8OJBV6Yi2XI1CsOLx0OTtu0t?usp=sharing
 
 What this does:
