@@ -94,12 +94,6 @@ def calculate_slop_index(extracted_text):
     num_chunks = 12 #mp.cpu_count()
     slop_words_chunks = split_into_chunks(slop_words, num_chunks)
     
-    # Pre-compile the regex pattern
-    compiled_pattern = re.compile(
-        r'#####################\n# Test Model Output #\n#####################\n(.*?)################\n# Judge Output #\n################',
-        re.DOTALL
-    )
-    
     if not extracted_text:
         slop_index = 0.0
     else:
