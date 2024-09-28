@@ -6,6 +6,14 @@
 
 Try the sampler here: https://colab.research.google.com/drive/11TjqWQCZ8OJBV6Yi2XI1CsOLx0OTtu0t?usp=sharing
 
+What this does:
+
+You can tell it to avoid "a tapestry of", "a testament to", etc., and it will backtrack and try something else if it hits that phrase. It can handle 1000s of slop phrases without impacting performance. The phrases and downregulation amounts are user configurable. Previous approaches have done this with per-token logit biasing; but that's quite ineffective since most slop words & phrases are more than one token, and it impairs output quality if we downregulate all those partial-word tokens. So instead, we wait for the whole phrase to appear in the output, then backtrack and downregulate all the tokens that could have produced the slop phrase, and continue from there.
+
+Why it's interesting:
+
+Samplers typically work at the token level -- but that doesn't work if want to avoid words/phrases that tokenise to >1 tokens. Elara might tokenise to ["El", "ara"], and we don't want to reduce the probs of everything beginning with "El". So, this approach waits for the whole phrase to appear, then backtracks and reduces the probabilities of all the likely tokens that will lead to that phrase being output. Nobody afaik has tried this before. It should produce better results than instructing the model to avoid words & phrases in the prompt.
+
 Disclaimer: I threw this together today as a proof of concept so this is research grade code. It should work with most transformers models, although I noticed gemma2 threw an error. Good luck!
 
 GPT-slop follows:
