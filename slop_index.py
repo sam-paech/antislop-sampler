@@ -1,11 +1,7 @@
-# %%
 import json
 import re
-import os
 import matplotlib.pyplot as plt
 import numpy as np
-import multiprocessing as mp
-from tqdm import tqdm
 from joblib import Parallel, delayed
 
 def load_and_preprocess_slop_words():
@@ -87,7 +83,8 @@ def split_into_chunks(slop_words, num_chunks):
     return [dict(slop_words_items[i:i + chunk_size]) for i in range(0, len(slop_words_items), chunk_size)]
 
 
-# %%
+# Call this to function to calculate a slop score.
+# This is the way it's calculated for the eqbench creative writing leaderboard.
 def calculate_slop_index(extracted_text):    
     slop_words = load_and_preprocess_slop_words()
     
