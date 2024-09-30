@@ -7,6 +7,7 @@ Try the sampler here: [https://colab.research.google.com/drive/11TjqWQCZ8OJBV6Yi
 ## Update
 
 - Squashed vram leaks, fixed bugs. It should work with any transformers model now.
+- Support min_p
 - Now using slop_phrase_prob_adjustments.json by default, which has a more intuitive probability adjustment per slop phrase (1 == no change; < 1 means probability is reduced by that factor). It looks like this:
 ```
 [
