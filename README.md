@@ -7,7 +7,7 @@ Try the sampler here: [https://colab.research.google.com/drive/11TjqWQCZ8OJBV6Yi
 ## Update
 
 - Squashed vram leaks, fixed bugs. It should work with any transformers model now.
-- Now using slop_phrase_prob_adjustments, which has a more intuitive probability adjustment per slop phrase (lower value --> lower prob of phrase occurring).
+- Now using slop_phrase_prob_adjustments.json, which has a more intuitive probability adjustment per slop phrase (1 == no change; < 1 means probability is reduced by that factor).
 - I discovered the sampler can squash an annoying habit of LLM writing: overuse of antitheses, e.g. `...not by x, but by y`, simply by downregulating the string `", not"`. Yay! I think there will be a lot of interesting life hacks to be found like this.
 - I've made some generate functions that you can import to deploy the sampler in your code:
 
