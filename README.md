@@ -18,7 +18,7 @@ Try the sampler here: [https://colab.research.google.com/drive/11TjqWQCZ8OJBV6Yi
     ...
 ]
 ```
-- I discovered the sampler can squash an annoying habit of LLM writing: overuse of antitheses, e.g. `...not by x, but by y`, simply by downregulating the string `", not"`. Yay! I think there will be a lot of interesting life hacks to be found like this.
+- I discovered the sampler can squash an annoying habit of LLM writing: overuse of antitheses, e.g. `...not x, but y`, simply by downregulating the string `", not"`. Yay! I think there will be a lot of interesting life hacks to be found like this.
 - I've made some generate functions that you can import to deploy the sampler in your code:
 
 ### chat_antislop
