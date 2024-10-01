@@ -24,7 +24,7 @@ https://github.com/user-attachments/assets/aafe267e-adf1-43e6-9622-5e68b08f7fb3
 ]
 ```
 - I discovered the sampler can squash an annoying habit of LLM writing: overuse of antitheses, e.g. `...not x, but y`, simply by downregulating the string `", not"`. Yay! I think there will be a lot of interesting life hacks to be found like this.
-- I've made some generate functions that you can import to deploy the sampler in your code:
+- I've made some generate functions (found in `antislop_generate.py`) that you can import to deploy the sampler in your code:
 
 ### chat_antislop
 ```python
@@ -77,6 +77,20 @@ You can give it a list of words & phrases to avoid like "a tapestry of", "a test
 Samplers typically work at the token level -- but that doesn't work if want to avoid words/phrases that tokenise to >1 tokens. Elara might tokenise to ["El", "ara"], and we don't want to reduce the probs of everything beginning with "El". So, this approach waits for the whole phrase to appear, then backtracks and reduces the probabilities of all the likely tokens that will lead to that phrase being output. Nobody afaik has tried this before. It should produce better results than instructing the model to avoid words & phrases in the prompt.
 
 * Disclaimer: This code has come together over a few days so expect research grade code & possibly bugs.
+
+
+## What you need to implement this
+
+If you'd like to implement this sampler in something other than transformers, here's what you need:
+
+- A loop to manage the state of the sampler, as it backtracks and needs to refer to past logits that it's cached
+- Per-token continuation generation (think: completions, not chat.completions)
+- Raw logits
+- Ability to bias logits when generating
+
+Unfortunately that rules out most commercial APIs since few let you specify logit biases. For inferencing engines, they will likely be a mixed bag in terms of ease of implementation, as most/all samplers work per token without this weird backtracking stuff we're doing here.
+
+If you do implement this sampler in your thing, please let me know about it!
 
 ## GPT-generated details follow:
 
