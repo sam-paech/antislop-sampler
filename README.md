@@ -36,7 +36,7 @@ for token in chat_antislop(
     model=model,
     tokenizer=tokenizer,
     messages=messages,
-    max_length=400,
+    max_new_tokens=400,
     # Antislop sampling may be less reliable at low temperatures.
     temperature=1,    
     min_p=0.1,
@@ -58,7 +58,7 @@ generated_text = generate_antislop(
     model=model,
     tokenizer=tokenizer,
     prompt=prompt,
-    max_length=300,
+    max_new_tokens=300,
     temperature=1,
     min_p=0.1,
     adjustment_strength=2.0,
