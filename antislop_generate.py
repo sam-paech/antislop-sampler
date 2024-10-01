@@ -74,7 +74,8 @@ class AdvancedCustomWordSampler:
     def generate_stream(
         self,
         prompt: str,
-        max_length: int,
+        max_length: int = None,
+        max_new_tokens: int = None,
         temperature: float = 1.0,
         top_k: int = None,
         top_p: float = None,
@@ -85,7 +86,8 @@ class AdvancedCustomWordSampler:
 
         Args:
             prompt (str): The initial text prompt.
-            max_length (int): The maximum length of the generated text.
+            max_length (int, optional): The maximum length of the generated text.
+            max_new_tokens (int, optional): The maximum number of new tokens to generate.
             temperature (float): Sampling temperature.
             top_k (int): Top-k filtering.
             top_p (float): Top-p (nucleus) filtering.
@@ -102,7 +104,13 @@ class AdvancedCustomWordSampler:
         output_tokens_counter = 0
         pad_token_id = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else self.tokenizer.eos_token_id
 
-        while len(generated_sequence) < max_length:
+        num_new_tokens = 0
+        while True:
+            if max_length is not None and len(generated_sequence) >= max_length:
+                break
+            if max_new_tokens is not None and num_new_tokens >= max_new_tokens:
+                break
+
             current_input_ids = torch.tensor([generated_sequence], device=self.device)
 
             regenerating = False
@@ -146,6 +154,7 @@ class AdvancedCustomWordSampler:
             generated_sequence.append(next_token)
             current_position += 1
             output_tokens_counter += 1
+            num_new_tokens += 1
 
             # Clean up the logits cache
             to_del = [key for key in self.logit_cache if key < current_position - self.max_sequence_length - 5]
@@ -198,6 +207,7 @@ class AdvancedCustomWordSampler:
                 for _ in range(len(matched_sequence)):
                     generated_sequence.pop()
                     current_position -= 1
+                    num_new_tokens -= 1
 
                 # Clear the logit_cache ahead of start_pos since we've backtracked
                 to_del = [key for key in self.logit_cache if key > start_pos]
@@ -205,8 +215,6 @@ class AdvancedCustomWordSampler:
                     del self.logit_cache[key]
 
                 continue  # Continue to the next iteration
-
-        yield generated_sequence
 
         # Clear variables to free up memory
         del next_token_logits, filtered_logits
@@ -246,7 +254,8 @@ def chat_antislop(
     model: PreTrainedModel,
     tokenizer: PreTrainedTokenizer,
     messages: List[Dict[str, str]],
-    max_length: int,
+    max_length: int = None,
+    max_new_tokens: int = None,
     temperature: float = 1.0,
     top_k: int = None,
     top_p: float = None,
@@ -263,7 +272,8 @@ def chat_antislop(
         model (PreTrainedModel): The language model.
         tokenizer (PreTrainedTokenizer): The tokenizer.
         messages (List[Dict[str, str]]): The list of messages in the conversation.
-        max_length (int): The maximum length of the generated text (including the prompt).
+        max_length (int, optional): The maximum length of the generated text (including the prompt).
+        max_new_tokens (int, optional): The maximum number of new tokens to generate.
         temperature (float): Sampling temperature.
         top_k (int): Top-k filtering.
         top_p (float): Top-p (nucleus) filtering.
@@ -285,6 +295,7 @@ def chat_antislop(
         tokenizer=tokenizer,
         prompt=prompt,
         max_length=max_length,
+        max_new_tokens=max_new_tokens,
         temperature=temperature,
         top_k=top_k,
         top_p=top_p,
@@ -300,7 +311,8 @@ def generate_antislop(
     model: PreTrainedModel,
     tokenizer: PreTrainedTokenizer,
     prompt: str,
-    max_length: int,
+    max_length: int = None,
+    max_new_tokens: int = None,
     temperature: float = 1.0,
     top_k: int = None,
     top_p: float = None,
@@ -316,8 +328,10 @@ def generate_antislop(
     # Type checking
     if not isinstance(prompt, str):
         raise TypeError("prompt must be a string")
-    if not isinstance(max_length, int):
-        raise TypeError("max_length must be an integer")
+    if max_length is not None and not isinstance(max_length, int):
+        raise TypeError("max_length must be an integer or None")
+    if max_new_tokens is not None and not isinstance(max_new_tokens, int):
+        raise TypeError("max_new_tokens must be an integer or None")
     if not isinstance(temperature, (int, float)):
         raise TypeError("temperature must be a float")
     if top_k is not None and not isinstance(top_k, int):
@@ -336,8 +350,10 @@ def generate_antislop(
         raise TypeError("streaming must be a boolean")
 
     # Value validation
-    if max_length <= 0:
+    if max_length is not None and max_length <= 0:
         raise ValueError("max_length must be positive")
+    if max_new_tokens is not None and max_new_tokens <= 0:
+        raise ValueError("max_new_tokens must be positive")
     if temperature <= 0:
         raise ValueError("temperature must be > 0")
     if top_k is not None and top_k <= 0:
@@ -362,6 +378,7 @@ def generate_antislop(
             tokenizer=tokenizer,
             prompt=prompt,
             max_length=max_length,
+            max_new_tokens=max_new_tokens,
             temperature=temperature,
             top_k=top_k,
             top_p=top_p,
@@ -378,6 +395,7 @@ def generate_antislop(
             tokenizer=tokenizer,
             prompt=prompt,
             max_length=max_length,
+            max_new_tokens=max_new_tokens,
             temperature=temperature,
             top_k=top_k,
             top_p=top_p,
@@ -390,12 +408,12 @@ def generate_antislop(
             generated_tokens.append(token)
         return generated_tokens
 
-# The original generate_antislop function remains unchanged
 def _generate_antislop(
     model: PreTrainedModel,
     tokenizer: PreTrainedTokenizer,
     prompt: str,
-    max_length: int,
+    max_length: int = None,
+    max_new_tokens: int = None,
     temperature: float = 1.0,
     top_k: int = None,
     top_p: float = None,
@@ -411,7 +429,7 @@ def _generate_antislop(
     """
 
     if slop_phrase_prob_adjustments is None:
-        slop_phrase_prob_adjustments = [['kaleidoscope', 0.5], ['symphony', 0.5], ['testament to', 0.5], ['elara', 0.5], ['moth to a flame', 0.5], ['canvas', 0.5], ['eyes glinted', 0.5], ['camaraderie', 0.5], ['humble abode', 0.5], ['cold and calculating', 0.5], ['eyes never leaving', 0.5], ['tapestry', 0.5], ['barely above a whisper', 0.5], ['body and soul', 0.5], ['orchestra', 0.5], ['depths', 0.5], ['a dance of', 0.5], ['chuckles darkly', 0.5], ['maybe, just maybe', 0.5], ['maybe that was enough', 0.5], ['with a mixture of', 0.5], ['air was filled with anticipation', 0.5], ['cacophony', 0.5], ['bore silent witness to', 0.5], ['eyes sparkling with mischief', 0.5], ['was only just beginning', 0.5], ['practiced ease', 0.5], ['ready for the challenges', 0.5], ['only just getting started', 0.5], ['once upon a time', 0.5], ['nestled deep within', 0.5], ['ethereal beauty', 0.5], ['life would never be the same again.', 0.5], ["it's important to remember", 0.5], ['for what seemed like an eternity', 0.5], ['feel a sense of pride and accomplishment', 0.5], ['little did he know', 0.5], ['ball is in your court', 0.5], ['game is on', 0.5], ['choice is yours', 0.5], ['feels like an electric shock', 0.5], ['threatens to consume', 0.5], ['meticulous', 0.5], ['meticulously', 0.5], ['navigating', 0.5], ['complexities', 0.5], ['realm', 0.5], ['understanding', 0.5], ['dive into', 0.5], ['shall', 0.5], ['tailored', 0.5], ['towards', 0.5], ['underpins', 0.5], ['everchanging', 0.5], ['ever-evolving', 0.5], ['world of', 0.5], ['not only', 0.5], ['alright', 0.5], ['embark', 0.5], ['journey', 0.5], ["today's digital age", 0.5], ['game changer', 0.5], ['designed to enhance', 0.5], ['it is advisable', 0.5], ['daunting', 0.5], ['when it comes to', 0.5], ['in the realm of', 0.5], ['amongst', 0.5], ['unlock the secrets', 0.5], ['unveil the secrets', 0.5], ['and robust', 0.5], ['diving', 0.5], ['elevate', 0.5], ['unleash', 0.5], ['cutting-edge', 0.5], ['rapidly', 0.5], ['expanding', 0.5], ['mastering', 0.5], ['excels', 0.5], ['harness', 0.5], ["it's important to note", 0.5], ['delve into', 0.5], ['bustling', 0.5], ['in summary', 0.5], ['remember that', 0.5], ['take a dive into', 0.5], ['landscape', 0.5], ['in the world of', 0.5], ['vibrant', 0.5], ['metropolis', 0.5], ['firstly', 0.5], ['moreover', 0.5], ['crucial', 0.5], ['to consider', 0.5], ['essential', 0.5], ['there are a few considerations', 0.5], ['ensure', 0.5], ["it's essential to", 0.5], ['furthermore', 0.5], ['vital', 0.5], ['keen', 0.5], ['fancy', 0.5], ['as a professional', 0.5], ['however', 0.5], ['therefore', 0.5], ['additionally', 0.5], ['specifically', 0.5], ['generally', 0.5], ['consequently', 0.5], ['importantly', 0.5], ['indeed', 0.5], ['thus', 0.5], ['alternatively', 0.5], ['notably', 0.5], ['as well as', 0.5], ['despite', 0.5], ['essentially', 0.5], ['even though', 0.5], ['in contrast', 0.5], ['in order to', 0.5], ['due to', 0.5], ['even if', 0.5], ['given that', 0.5], ['arguably', 0.5], ['you may want to', 0.5], ['on the other hand', 0.5], ['as previously mentioned', 0.5], ["it's worth noting that", 0.5], ['to summarize', 0.5], ['ultimately', 0.5], ['to put it simply', 0.5], ["in today's digital era", 0.5], ['reverberate', 0.5], ['enhance', 0.5], ['emphasize', 0.5], ['revolutionize', 0.5], ['foster', 0.5], ['remnant', 0.5], ['subsequently', 0.5], ['nestled', 0.5], ['labyrinth', 0.5], ['gossamer', 0.5], ['enigma', 0.5], ['whispering', 0.5], ['sights unseen', 0.5], ['sounds unheard', 0.5], ['indelible', 0.5], ['my friend', 0.5], ['in conclusion', 0.5], ['technopolis', 0.5], ['was soft and gentle', 0.5], ['shivers down', 0.5], ['shivers up', 0.5], ['leaving trails of fire', 0.5], ['ministrations', 0.5], ['audible pop', 0.5], ['rivulets of', 0.5], ['despite herself', 0.5], ['reckless abandon', 0.5], ['torn between', 0.5], ['fiery red hair', 0.5], ['long lashes', 0.5], ['propriety be damned', 0.5], ['world narrows', 0.5], ['chestnut eyes', 0.5], ['cheeks flaming', 0.5], ['cheeks hollowing', 0.5], ['understandingly', 0.5], ['paperbound', 0.5], ['hesitantly', 0.5], ['piqued', 0.5], ['delved', 0.5], ['curveballs', 0.5], ['marveled', 0.5], ['inclusivity', 0.5], ['birdwatcher', 0.5], ['newfound', 0.5031423922762257], ['marveling', 0.5055622891781474], ["hiroshi's", 0.506870969939047], ['greentech', 0.5095092042816856], ['thoughtfully', 0.510153898156777], ['intently', 0.5153227374075411], ['birdwatching', 0.5157928537951464], ['amidst', 0.5161190296674488], ['cherishing', 0.5165772000484282], ['attentively', 0.5169695157301188], ['interjected', 0.5208671011920856], ['serendipitous', 0.5219535186850968], ["marianne's", 0.5220118279910801], ["maya's", 0.5229467776607973], ['excitedly', 0.5235248665614571], ['steepled', 0.5235772300889154], ['engrossed', 0.5236764398055735], ['fostering', 0.5259281627970829], ['brainstormed', 0.5274863713437], ['furrowed', 0.5280860997212533], ['nodded', 0.528640180937889], ['contemplatively', 0.5293698584415747], ['jotted', 0.5300819077932343], ["mia's", 0.5311706933553655]];
+        slop_phrase_prob_adjustments = [['kaleidoscope', 0.5], ['symphony', 0.5], ['testament to', 0.5], ['elara', 0.5], ['moth to a flame', 0.5]]
         slop_phrase_prob_adjustments = dict(slop_phrase_prob_adjustments)
 
     starting_tokens_lookup = precompute_starting_tokens(tokenizer, slop_phrase_prob_adjustments)
@@ -435,12 +453,14 @@ def _generate_antislop(
     token_stream = sampler.generate_stream(
         prompt=prompt,
         max_length=max_length,
+        max_new_tokens=max_new_tokens,
         temperature=temperature,
         top_k=top_k,
         top_p=top_p,
         min_p=min_p
     )
 
+    num_new_tokens = 0
     for generated_sequence in token_stream:
         current_length = len(generated_sequence)
         
@@ -453,15 +473,26 @@ def _generate_antislop(
                 last_released_position += 1
                 token_to_release = generated_sequence[last_released_position]
                 yield token_to_release
+                num_new_tokens += 1
+
+                # Check if we've reached max_new_tokens
+                if max_new_tokens is not None and num_new_tokens >= max_new_tokens:
+                    return
         
         last_sequence_length = current_length
+
+        # Check if we've reached max_length
+        if max_length is not None and current_length >= max_length:
+            return
     
     # Release any remaining tokens after generation is complete
     if last_released_position < len(generated_sequence)-1:
         for tok in generated_sequence[last_released_position+1:]:
             yield tok
+            num_new_tokens += 1
+            if max_new_tokens is not None and num_new_tokens >= max_new_tokens:
+                return
 
-# The precompute_starting_tokens function remains unchanged
 def precompute_starting_tokens(
     tokenizer: PreTrainedTokenizer, slop_phrase_prob_adjustments: Dict[str, float]
 ) -> Dict[Tuple[int, ...], Set[int]]:
