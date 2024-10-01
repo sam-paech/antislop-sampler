@@ -76,7 +76,7 @@ You can give it a list of words & phrases to avoid like "a tapestry of", "a test
 
 Samplers typically work at the token level -- but that doesn't work if want to avoid words/phrases that tokenise to >1 tokens. Elara might tokenise to ["El", "ara"], and we don't want to reduce the probs of everything beginning with "El". So, this approach waits for the whole phrase to appear, then backtracks and reduces the probabilities of all the likely tokens that will lead to that phrase being output. Nobody afaik has tried this before. It should produce better results than instructing the model to avoid words & phrases in the prompt.
 
-* Disclaimer: This code has come together over a few days so expect research grade code & possibly bugs.
+* Disclaimers: This is only implemented in Transformers thus far. It is not well optimised. The code has come together over a few days so expect research grade code & possibly bugs.
 
 
 ## What you need to implement this
