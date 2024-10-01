@@ -88,7 +88,7 @@ If you'd like to implement this sampler in something other than transformers, he
 - Raw logits
 - Ability to bias logits when generating
 
-Unfortunately that rules out most commercial APIs since few let you specify logit biases. For inferencing engines, they will likely be a mixed bag in terms of ease of implementation, as most/all samplers work per token without this weird backtracking stuff we're doing here.
+Unfortunately that rules out most commercial APIs since few let you specify logit biases. For inferencing engines, they will likely be a mixed bag in terms of ease of integration, as most/all samplers work per token without this weird backtracking stuff we're doing here.
 
 If you do implement this sampler in your thing, please let me know about it!
 
