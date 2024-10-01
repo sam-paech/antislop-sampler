@@ -133,11 +133,11 @@ Example format:
 
 #### 2. Token Sequence Preparation
 
-The sampler preprocesses the overrepresented words to:
+The sampler preprocesses the passed slop phrases dict to:
 
 - Generate multiple variants (e.g., lowercase, uppercase, capitalized, with leading spaces).
 - Tokenize each variant using the model's tokenizer.
-- Map the token sequences to adjustment factors (inverse of the overrepresentation ratio).
+- Map the token sequences to adjustment factors found in the dict, which are specified per slop phrase.
 
 #### 3. Starting Tokens Lookup
 
@@ -151,19 +151,18 @@ To efficiently detect when an overrepresented word is being generated, the sampl
 During generation:
 
 - The sampler monitors the tokens being generated.
-- If a sequence matching an overrepresented word is detected, it:
+- If a sequence matching a disallowed word is detected, it:
 
+  - **Checks** to see if we would select the starting token of the disallowed word anyway after its probabilities were downregulated. If not:
   - **Backtracks**: Removes the tokens associated with the overrepresented word from the generated sequence.
   - **Adjusts Logits**: Modifies the model's logits (pre-softmax output probabilities) to downregulate the probability of generating the overrepresented word in subsequent attempts.
   - **Resamples**: Continues generation from the backtracked position, encouraging the model to choose alternative words.
 
-- This process can repeat if the model continues to attempt generating the overrepresented word, with adjustments becoming progressively stronger due to cumulative effects.
+- This process can repeat if the model generates another disallowed word at the same position, resulting in the logit cache at that position being downregulated for additional tokens.
 
 #### 5. Backtracking Mechanism
 
-- The sampler maintains a maximum backtracking limit (`max_backtrack`) to prevent infinite loops.
-- When backtracking occurs, the model's cached states (`past_key_values`) are updated to reflect the revised sequence.
-- The logit cache is also updated to ensure consistency in subsequent token predictions.
+- When backtracking, the logit cache is used instead of regenerating new logits for the backtracked position, as we may have backtracked to that position before and want to retain the previously downregulated probabilities.
 
 ### Technical Workflow
 
@@ -199,7 +198,7 @@ During generation:
      - Retrieve the adjustment factor for the detected sequence.
      - Adjust the logits at the position where the sequence started.
      - Backtrack by removing the overrepresented tokens from the sequence.
-     - Update the model's cached states and logit cache.
+     - Update the logit cache.
      - Record the downregulation to avoid redundant adjustments.
 
    - **Termination Conditions**:
@@ -214,11 +213,10 @@ During generation:
 
 ### Important Notes
 
-- **Overrepresented Words List**: Customize the `over_represented_words.json` file to target specific words or phrases relevant to your use case.
+- **Overrepresented Words List**: Customize the `slop_phrase_prob_adjustments.json` file to target specific words or phrases relevant to your use case.
 - **Adjusting Parameters**:
 
   - Increasing `adjustment_strength` will more aggressively downregulate overrepresented words but may affect generation fluency.
-  - Adjust `max_backtrack` based on the typical length of phrases you aim to avoid.
 
 - **Performance Considerations**:
 
@@ -238,17 +236,11 @@ During generation:
 
 - **Caching Mechanism**:
 
-  - The sampler caches the model's outputs (`logits` and `past_key_values`) to avoid redundant computations during backtracking.
-  - Efficient cache management ensures that only necessary recalculations are performed.
+  - The sampler caches the model's outputs (`logits`) to avoid redundant computations during backtracking and to ensure state is maintained for previously downregulated logits.
 
 - **Tokenization Considerations**:
 
   - The tokenizer's behavior (e.g., subword tokenization) is accounted for by precomputing all possible prefixes.
   - This ensures that partial matches of overrepresented words are detected early in the generation process.
-
-- **Backtracking Limitations**:
-
-  - The backtracking mechanism is designed to prevent infinite loops where the model repeatedly tries to generate an overrepresented word.
-  - By limiting the number of backtracking attempts and recording adjustments, the sampler balances between avoiding overused phrases and maintaining generation flow.
 
 ---
