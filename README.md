@@ -4,6 +4,11 @@
 
 Try the sampler here: [https://colab.research.google.com/drive/11TjqWQCZ8OJBV6Yi2XI1CsOLx0OTtu0t?usp=sharing](https://colab.research.google.com/drive/1Rd3V4AN31cDytfmY9u80rzHXPD_dS6x9?usp=sharing)
 
+
+Here it is in action (in slow mode so you can see its backtracking & revisions):
+
+https://github.com/user-attachments/assets/aafe267e-adf1-43e6-9622-5e68b08f7fb3
+
 ## Update
 
 - Squashed vram leaks, fixed bugs. It should work with any transformers model now.
