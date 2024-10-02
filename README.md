@@ -230,7 +230,7 @@ During generation:
   - The adjustment is applied in the logit space before the softmax function.
   - Adjusted logits are calculated as:
 
-    adjusted_logits = logits + log(adjustment_factor ** adjustment_strength)
+    adjusted_logits = logits * (adjustment_factor ** adjustment_strength)
 
   - This method allows for fine-grained control over the probability distribution without outright masking tokens.
 
