@@ -34,6 +34,7 @@ class AdvancedCustomWordSampler:
         adjustment_strength: float = 1.0,
         device: torch.device = torch.device('cuda'),
         slow_debug: bool = False,
+        use_cache: bool = False,  # Changed parameter name
     ):
         self.model = model.to(device)
         self.tokenizer = tokenizer
@@ -42,6 +43,7 @@ class AdvancedCustomWordSampler:
         self.adjustment_strength = adjustment_strength
         self.device = device
         self.slow_debug = slow_debug
+        self.use_cache = use_cache
 
         self.token_sequences = self._prepare_token_sequences()
         self.max_sequence_length = max(len(seq) for seq in self.token_sequences.keys())
@@ -105,6 +107,8 @@ class AdvancedCustomWordSampler:
         pad_token_id = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else self.tokenizer.eos_token_id
 
         num_new_tokens = 0
+        past_key_values = None
+
         while True:
             if max_length is not None and len(generated_sequence) >= max_length:
                 break
@@ -118,6 +122,8 @@ class AdvancedCustomWordSampler:
                 # We backtracked and want to use the cached logits
                 next_token_logits = self.logit_cache[current_position]
                 regenerating = True
+                if self.use_cache and past_key_values is not None:
+                    past_key_values = tuple(tuple(layer[:, :, :current_position, :] for layer in kv_pair) for kv_pair in past_key_values)
             else:
                 outputs = self.model.generate(
                     current_input_ids,
@@ -129,7 +135,11 @@ class AdvancedCustomWordSampler:
                     num_return_sequences=1,
                     return_dict_in_generate=True,
                     output_scores=True,
+                    use_cache=self.use_cache,
+                    past_key_values=past_key_values if self.use_cache else None,
                 )
+                if self.use_cache:
+                    past_key_values = outputs.past_key_values
                 next_token_logits = outputs.scores[0]
                 self.logit_cache[current_position] = next_token_logits.clone()
 
@@ -321,6 +331,7 @@ def generate_antislop(
     adjustment_strength: float = 1.0,
     device: torch.device = torch.device('cuda'),
     streaming: bool = False,
+    use_cache: bool = False,
 ) -> Union[Generator[str, None, None], List[int]]:
     """
     Wrapper function for generate_antislop that handles both streaming and non-streaming modes.
@@ -348,7 +359,9 @@ def generate_antislop(
         raise TypeError("device must be an instance of torch.device")
     if not isinstance(streaming, bool):
         raise TypeError("streaming must be a boolean")
-
+    if not isinstance(use_cache, bool):
+        raise TypeError("use_cache must be a boolean")
+    
     # Value validation
     if max_length is not None and max_length <= 0:
         raise ValueError("max_length must be positive")
@@ -386,7 +399,8 @@ def generate_antislop(
             slop_phrase_prob_adjustments=slop_phrase_prob_adjustments,
             adjustment_strength=adjustment_strength,
             device=device,
-            streaming=True
+            streaming=True,
+            use_cache=use_cache
         )
     else:
         generated_tokens = []
@@ -403,7 +417,8 @@ def generate_antislop(
             slop_phrase_prob_adjustments=slop_phrase_prob_adjustments,
             adjustment_strength=adjustment_strength,
             device=device,
-            streaming=True  # We always use streaming internally
+            streaming=True,  # We always use streaming internally
+            use_cache=use_cache
         ):
             generated_tokens.append(token)
         return generated_tokens
@@ -422,6 +437,7 @@ def _generate_antislop(
     adjustment_strength: float = 1.0,
     device: torch.device = torch.device('cuda'),
     streaming: bool = False,
+    use_cache: bool = False
 ) -> Generator[int, None, None]:
     """
     Generates text while avoiding overrepresented phrases (slop).
@@ -441,7 +457,8 @@ def _generate_antislop(
         starting_tokens_lookup=starting_tokens_lookup,
         adjustment_strength=adjustment_strength,
         device=device,
-        slow_debug=False
+        slow_debug=False,
+        use_cache=use_cache
     )
 
     prompt_tokens = tokenizer.encode(prompt, add_special_tokens=False)
