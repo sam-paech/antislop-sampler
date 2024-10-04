@@ -34,7 +34,7 @@ class AdvancedCustomWordSampler:
         adjustment_strength: float = 1.0,
         device: torch.device = torch.device('cuda'),
         slow_debug: bool = False,
-        use_cache: bool = False
+        use_cache: bool = True
     ):
         self.model = model.to(device)
         self.tokenizer = tokenizer
@@ -437,7 +437,7 @@ def _generate_antislop(
     adjustment_strength: float = 1.0,
     device: torch.device = torch.device('cuda'),
     streaming: bool = False,
-    use_cache: bool = False
+    use_cache: bool = True
 ) -> Generator[int, None, None]:
     """
     Generates text while avoiding overrepresented phrases (slop).
