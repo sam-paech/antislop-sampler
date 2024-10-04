@@ -9,7 +9,20 @@ Here it is in action (in slow mode so you can see its backtracking & revisions):
 
 https://github.com/user-attachments/assets/aafe267e-adf1-43e6-9622-5e68b08f7fb3
 
-## Update
+### 2024-10-05 update
+
+Refactored the code, lots of fixes.
+
+- Use model.generate for multiple tokens instead of just 1, using StoppingCondition criteria. This is much faster.
+- Add a basic JSON validator + enforcement to demonstrate how the sampler can enforce long-range constraints.
+- Switch to probs from logits for the cached values, so that down/upregulation works as expected.
+
+Quick blurb on the JSON validator:
+
+It uses the same backtracking mechanism to retry invalid JSON output. It checks for unintended unescaped quotes in strings, and encourages the model to choose a valid continuation. This is a very common fail mode for json outputs. Other kinds of per-token json grammars will just terminate the string if they see an unescaped quote, sadly ending the profound thought the LLM was in the middle of expressing. This is better. You can also use it with high temps.
+
+<details>
+<summary>### 2024-10-01 updates</summary>
 
 - Squashed vram leaks, fixed bugs. It should work with any transformers model now.
 - Support min_p
@@ -26,6 +39,8 @@ https://github.com/user-attachments/assets/aafe267e-adf1-43e6-9622-5e68b08f7fb3
 - I discovered the sampler can squash an annoying habit of LLM writing: overuse of antitheses, e.g. `...not x, but y`, simply by downregulating the string `", not"`. Yay! I think there will be a lot of interesting life hacks to be found like this.
 - I've made some generate functions (found in `antislop_generate.py`) that you can import to deploy the sampler in your code:
 
+</details>
+
 ### chat_antislop
 ```python
 # Chat generation with streaming
@@ -37,15 +52,16 @@ for token in chat_antislop(
     tokenizer=tokenizer,
     messages=messages,
     max_new_tokens=400,
-    # Antislop sampling may be less reliable at low temperatures.
-    temperature=1,    
+    temperature=1,
     min_p=0.1,
     # The adjustment_strength param scales how strongly the probability adjustments are applied.
     # A value of 1 means the values in slop_phrase_prob_adjustments (or the defaults) are used unmodified.
-    # Reasonable values are 0 (disabled) thru 10+ (effectively banning the list).
-    adjustment_strength=10.0,
+    # Reasonable values are 0 (disabled) thru 100+ (effectively banning the list).
+    adjustment_strength=100.0,
     # Optional: Provide a list of slop phrases and probability adjustments
     slop_phrase_prob_adjustments=slop_phrase_prob_adjustments,
+    enforce_json=False,
+    antislop_enabled=True,
     streaming=True
 ):
     print(tokenizer.decode(token), end='', flush=True)
@@ -54,15 +70,18 @@ for token in chat_antislop(
 ### generate_antislop
 ```python
 # generate without streaming
+prompt_with_template = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
 generated_text = generate_antislop(
     model=model,
     tokenizer=tokenizer,
     prompt=prompt,
-    max_new_tokens=300,
+    max_length=300,
     temperature=1,
     min_p=0.1,
-    adjustment_strength=2.0,
+    adjustment_strength=100.0,
     slop_phrase_prob_adjustments=slop_phrase_prob_adjustments,
+    enforce_json=False,
+    antislop_enabled=True,
     streaming=False
 )        
 print(tokenizer.decode(generated_text))
