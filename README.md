@@ -11,7 +11,7 @@ Here it is in action (in slow mode so you can see its backtracking & revisions):
 
 https://github.com/user-attachments/assets/aafe267e-adf1-43e6-9622-5e68b08f7fb3
 
-### 2024-10-05 update
+### 2024-10-05 Update
 
 Refactored the code, lots of fixes.
 
@@ -25,7 +25,7 @@ Quick blurb on the JSON validator:
 It uses the same backtracking mechanism to retry invalid JSON output. It checks for unintended unescaped quotes in strings, and encourages the model to choose a valid continuation. This is a very common fail mode for JSON outputs. Other kinds of per-token JSON grammars will just terminate the string if they see an unescaped quote, sadly ending the profound thought the LLM was in the middle of expressing. This is better. You can also use it with high temps.
 
 <details>
-<summary>### 2024-10-01 updates</summary>
+<summary>### 2024-10-01 Update</summary>
 
 - Squashed vram leaks, fixed bugs. It should work with any transformers model now.
 - Support min_p
@@ -268,3 +268,18 @@ During generation:
   - This ensures that partial matches of overrepresented words are detected early in the generation process.
 
 ---
+
+
+## How to Cite
+
+A paper is in the works, hang tight.
+
+```
+@misc{paech2024antislop,
+      title={antislop-sampler},
+      author={Samuel J. Paech},
+      year={2024},
+      howpublished={\url{https://github.com/sam-paech/antislop-sampler}},
+      note={GitHub repository}
+}
+```
