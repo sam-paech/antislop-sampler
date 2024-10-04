@@ -227,7 +227,7 @@ class AdvancedCustomWordSampler:
                 continue  # Continue to the next iteration
 
         # Clear variables to free up memory
-        del next_token_logits, filtered_logits
+        del next_token_logits, filtered_logits, past_key_values
 
     def _filter_logits(self, logits: torch.FloatTensor, top_k: int, top_p: float, min_p: float) -> torch.FloatTensor:
         # Apply min_p filtering
