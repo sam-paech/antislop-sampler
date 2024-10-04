@@ -34,7 +34,7 @@ class AdvancedCustomWordSampler:
         adjustment_strength: float = 1.0,
         device: torch.device = torch.device('cuda'),
         slow_debug: bool = False,
-        use_cache: bool = False,  # Changed parameter name
+        use_cache: bool = False
     ):
         self.model = model.to(device)
         self.tokenizer = tokenizer
@@ -331,7 +331,7 @@ def generate_antislop(
     adjustment_strength: float = 1.0,
     device: torch.device = torch.device('cuda'),
     streaming: bool = False,
-    use_cache: bool = False,
+    use_cache: bool = True,
 ) -> Union[Generator[str, None, None], List[int]]:
     """
     Wrapper function for generate_antislop that handles both streaming and non-streaming modes.
