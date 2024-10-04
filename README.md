@@ -2,6 +2,8 @@
 
 ## Overview
 
+The AntiSlop sampler uses a backtracking mechanism to go back and revise when it encounters a disallowed word or phrase. No more testaments or tapestries or other gpt-slop.
+
 Try the sampler here: [https://colab.research.google.com/drive/11TjqWQCZ8OJBV6Yi2XI1CsOLx0OTtu0t?usp=sharing](https://colab.research.google.com/drive/1Rd3V4AN31cDytfmY9u80rzHXPD_dS6x9?usp=sharing)
 
 
@@ -15,7 +17,8 @@ Refactored the code, lots of fixes.
 
 - Now model.generate with stopping conditions, to for multiple tokens instead of just 1 at a time. This is much faster.
 - Added a basic JSON validator + enforcement to demonstrate how the sampler can enforce long-range constraints.
-- Switch to probs from logits for the cached values, so that down/upregulation works as expected.
+- Switch to probs from logits for the cached values, so that down/upregulation works as expected (this was a mistake in the previous implementation).
+- Refactored the code for better organisation.
 
 Quick blurb on the JSON validator:
 
@@ -90,6 +93,8 @@ print(tokenizer.decode(generated_text))
 ## What this does:
 
 You can give it a list of words & phrases to avoid like "a tapestry of", "a testament to", etc., and it will backtrack and try something else if it hits that phrase. It can handle 1000s of slop phrases since the lookups are fast. The phrases and downregulation amounts are user configurable. Previous approaches have done this with per-token logit biasing; but that's quite ineffective since most slop words & phrases are more than one token, and it impairs output quality if we downregulate all those partial-word tokens. So instead, we wait for the whole phrase to appear in the output, then backtrack and downregulate all the tokens that could have produced the slop phrase, and continue from there.
+
+For the default slop list, we computed a large list of words that are over-represented in LLM output compared to normal human writing. This list is supplemented by a list of over-used phrases that are pet peeves of LLM enthusiasts. During generation, if any of the words & phrases in this list are generated, the sampler reduces the probability of the starting tokens that can lead to that phrase, by the factor specified in the config. This way you can lightly de-slop or strongly de-slop. You can of course also specify your own phrase list & weights.
 
 ## Why it's interesting:
 

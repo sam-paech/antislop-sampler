@@ -182,8 +182,6 @@ class SlopPhraseHandler:
             with self.debug_output:
                 self.debug_output.clear_output(wait=True)
                 display(HTML(f"<pre>{message}</pre>"))
-        #else:
-        #    print(message)
 
 
 class SlopPhraseStoppingCriteria:
@@ -212,14 +210,8 @@ class CustomSlopPhraseStoppingCriteria(StoppingCriteria):
 
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
         # Combine previous tokens with newly generated tokens
-        #combined_tokens = self.previous_tokens + input_ids[0].tolist()
         self.previous_tokens = input_ids[0].tolist()
-        
         # Check only the last max_sequence_length tokens
-        #check_tokens = self.previous_tokens[-self.max_slop_phrase_length:]
-
-        #print('checking for disallowed sequences')
-        
         for seq_length in range(self.max_slop_phrase_length, 0, -1):
             if len(self.previous_tokens) < seq_length:
                 continue

@@ -255,8 +255,6 @@ class JSONValidator:
             with self.debug_output:
                 self.debug_output.clear_output(wait=True)
                 display(HTML(f"<pre>{message}</pre>"))
-        #else:
-        #    print(message)
 
 
 class JSONValidationStoppingCriteria(StoppingCriteria):
@@ -267,16 +265,11 @@ class JSONValidationStoppingCriteria(StoppingCriteria):
         self.previous_tokens = previous_tokens or []
 
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
-        # Combine previous tokens with newly generated tokens
-        #print(self.tokenizer.decode(input_ids[0]))
         self.previous_tokens = input_ids[0].tolist()
         
         # Check if the generated sequence is valid JSON
         result = self.json_validator._validate_json_string(self.previous_tokens, self.prompt_length, validate_only=True)
 
-        #if result:
-        #    print('! json invalid: stopping generation')
-        
         return result
 
     def update_previous_tokens(self, new_tokens):
