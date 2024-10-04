@@ -1,20 +1,21 @@
+# Calculates a slop score for a provided text
+
 import json
 import re
 import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
 import numpy as np
 from joblib import Parallel, delayed
 
 def load_and_preprocess_slop_words():
-    with open('slop_phrases.json', 'r') as f:
-        over_represented_words = json.load(f)
+    with open('slop_phrase_prob_adjustments.json', 'r') as f:
+        slop_phrases = json.load(f)
     
-    # Assuming over_represented_words is a list of [word, score] pairs
-    log_scores = [np.log(score+2) for word, score in over_represented_words]
-    max_score = max(log_scores)
-    scaled_scores = [score / max_score for score in log_scores]
-
-    n_slop_words = 400
-    return {word.lower(): score for (word, _), score in zip(over_represented_words[:n_slop_words], scaled_scores[:n_slop_words])}
+    phrase_weighting = [1.0 - prob_adjustment for word, prob_adjustment in slop_phrases]
+    max_score = max(phrase_weighting)
+    scaled_weightings = [score / max_score for score in phrase_weighting]
+    n_slop_words = 600
+    return {word.lower(): score for (word, _), score in zip(slop_phrases[:n_slop_words], scaled_weightings[:n_slop_words])}
 
 def extract_text_blocks(file_path, compiled_pattern):
     with open(file_path, 'r', encoding='utf-8') as file:
@@ -29,9 +30,6 @@ def calculate_slop_score_chunk(args):
         score * len(re.findall(r'\b' + re.escape(word) + r'\b', text))
         for word, score in slop_words_chunk.items()
     )
-
-import matplotlib.pyplot as plt
-import matplotlib.ticker as ticker
 
 def calculate_and_plot_slop_indices(slop_indices):
     if not slop_indices:
@@ -101,6 +99,4 @@ def calculate_slop_index(extracted_text):
         total_words = len(extracted_text.split())
         slop_index = (slop_score / total_words) * 1000 if total_words > 0 else 0
     return slop_index
-
-
 
