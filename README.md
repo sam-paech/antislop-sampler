@@ -15,6 +15,7 @@ https://github.com/user-attachments/assets/aafe267e-adf1-43e6-9622-5e68b08f7fb3
 
 Refactored the code, lots of fixes.
 
+- Added an OpenAI compatible API server.
 - Now using model.generate with stopping conditions, to generate for multiple tokens instead of just 1 at a time. This is much faster.
 - Added a basic JSON validator + enforcement to demonstrate how the sampler can enforce long-range constraints.
 - Switch to probs from logits for the cached values, so that down/upregulation works as expected (this was a mistake in the previous implementation).

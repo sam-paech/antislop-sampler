@@ -123,12 +123,13 @@ class AntiSlopSampler:
             processed_text += new_inference
 
             # Encode the new part to get new tokens
-            new_tokens = self.tokenizer.encode(new_inference, add_special_tokens=False)            
+            yield new_text
+            #new_tokens = self.tokenizer.encode(new_inference, add_special_tokens=False)            
             
-            for new_token in new_tokens:
-                generated_sequence.append(new_token)
+            #for new_token in new_tokens:
+            #    generated_sequence.append(new_token)
                 # Yield the new token immediately
-                yield new_token
+            #    yield new_token
 
         # Wait for the generation to complete and get the output
         thread.join()
@@ -217,7 +218,7 @@ class AntiSlopSampler:
 
         while True:            
             if max_new_tokens is not None and len(generated_sequence) - prompt_length >= max_new_tokens:
-                print('max_new_tokens reached')
+                #print('max_new_tokens reached')
                 break
 
             new_toks_to_generate = max_new_tokens - (len(generated_sequence) - prompt_length)            
@@ -232,7 +233,8 @@ class AntiSlopSampler:
                 regenerating = True
                 #print('using probs cache')
             else:
-                for token in self._generate_streaming(
+                context = self.tokenizer.decode(generated_sequence, skip_special_tokens=False)
+                for new_text in self._generate_streaming(
                     current_input_ids,
                     new_toks_to_generate,
                     temperature,
@@ -242,17 +244,19 @@ class AntiSlopSampler:
                     pad_token_id,
                     stopping_criteria_args
                 ):
-                    generated_sequence.append(token)
+                    context += new_text
                     output_tokens_counter += 1                    
                     
                     if output_tokens_counter >= self.output_every_n_tokens:
                         output_tokens_counter = 0
-                        current_text = self.tokenizer.decode(generated_sequence[prompt_length:])
+                        #current_text = self.tokenizer.decode(generated_sequence[prompt_length:])
+
                         if self.inference_output:
                             with self.inference_output:
                                 self.inference_output.clear_output(wait=True)
-                                display(HTML(f"<div style='white-space: pre-wrap;'>{current_text}</div>"))
-                        yield generated_sequence
+                                display(HTML(f"<div style='white-space: pre-wrap;'>{context}</div>"))
+                        #yield generated_sequence
+                        yield self.tokenizer.encode(context, add_special_tokens=False)
 
                 # sync with the returned vals in case the streaming came thru out of order
                 # (not sure if this is necessary)
@@ -447,7 +451,8 @@ def chat_antislop(
             If streaming is False, returns a list of generated token IDs.
     """
     # Build the prompt using the provided messages
-    prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    #prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    prompt = tokenizer.apply_chat_template(messages, tokenize=False)
 
     return generate_antislop(
         model=model,
@@ -529,14 +534,19 @@ def generate_antislop(
         raise ValueError("max_new_tokens must be positive")
     if temperature <= 0:
         raise ValueError("temperature must be > 0")
-    if top_k is not None and top_k <= 0:
+    if top_k is not None and top_k < 0:
         raise ValueError("top_k must be positive")
-    if top_p is not None and (top_p <= 0 or top_p > 1):
+    if top_p is not None and (top_p < 0 or top_p > 1):
         raise ValueError("top_p must be in the range (0, 1]")
-    if min_p is not None and (min_p <= 0 or min_p > 1):
+    if min_p is not None and (min_p < 0 or min_p > 1):
+        print(min_p)
         raise ValueError("min_p must be in the range (0, 1]")
     if adjustment_strength < 0:
         raise ValueError("adjustment_strength must be non-negative")
+    
+    if not debug_output or not inference_output:
+        debug_delay = 0
+        slow_debug = False
 
     if slop_phrase_prob_adjustments:
         for phrase, adjustment in slop_phrase_prob_adjustments.items():
@@ -659,22 +669,14 @@ def _generate_antislop(
     last_released_position = len(prompt_tokens) - 1
     last_sequence_length = len(prompt_tokens)
 
-    token_stream = sampler.generate_stream(
-        prompt=prompt,
-        max_length=max_length,
-        max_new_tokens=max_new_tokens,
-        temperature=temperature,
-        top_k=top_k,
-        top_p=top_p,
-        min_p=min_p
-    )
-
     num_new_tokens = 0
     for generated_sequence in token_stream:
         current_length = len(generated_sequence)
-        
+        #print(tokenizer.decode(generated_sequence))
+
         if current_length <= last_sequence_length:
             tokens_to_wait += last_sequence_length - current_length
+            
         else:
             if tokens_to_wait > 0:
                 tokens_to_wait -= 1
@@ -684,16 +686,8 @@ def _generate_antislop(
                 yield token_to_release
                 num_new_tokens += 1
 
-                # Check if we've reached max_new_tokens
-                if max_new_tokens is not None and num_new_tokens >= max_new_tokens:
-                    return
-        
         last_sequence_length = current_length
 
-        # Check if we've reached max_length
-        if max_length is not None and current_length >= max_length:
-            return
-    
     # Release any remaining tokens after generation is complete
     if last_released_position < len(generated_sequence)-1:
         for tok in generated_sequence[last_released_position+1:]:
