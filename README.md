@@ -2,7 +2,7 @@
 
 ## Overview
 
-The AntiSlop sampler uses a backtracking mechanism to go back and revise when it encounters a disallowed word or phrase. No more testaments or tapestries or other gpt-slop.
+The AntiSlop sampler uses a backtracking mechanism to go back and retry with adjusted token probabilities when it encounters a disallowed word or phrase. No more testaments or tapestries or other gpt-slop.
 
 Try the sampler here: 
 
