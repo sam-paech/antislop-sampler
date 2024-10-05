@@ -73,7 +73,6 @@ class AntiSlopSampler:
         self.streamer_retval = None
 
     def _generate_streaming(self, current_input_ids, new_toks_to_generate, temperature, min_p, top_k, top_p, pad_token_id, stopping_criteria_args):
-        #streamer = TextIteratorStreamer(self.tokenizer, skip_special_tokens=True)
         streamer = TextIteratorStreamer(self.tokenizer, skip_special_tokens=False)
 
         generation_kwargs = dict(
@@ -109,21 +108,7 @@ class AntiSlopSampler:
         thread = Thread(target=generate_and_queue)
         thread.start()
 
-        generated_sequence = []
-        received_text = ''
-        prompt_text = self.tokenizer.decode(current_input_ids[0], skip_special_tokens=True)
-        prompt_text_length = len(prompt_text)
-        processed_text = ''
-
-        # Iterate over the streamer to get generated tokens
-        for new_text in streamer:            
-            #received_text += new_text
-            #if len(received_text) < prompt_text_length:
-            #    continue
-            #new_inference = received_text[prompt_text_length + len(processed_text):]
-            #processed_text += new_inference
-
-            # Encode the new part to get new tokens
+        for new_text in streamer:
             yield new_text
 
         # Wait for the generation to complete and get the output
@@ -227,13 +212,7 @@ class AntiSlopSampler:
                 # We backtracked and want to use the cached logits
                 next_token_probs = self.slop_phrase_handler.probs_cache[current_position]
                 regenerating = True
-                #print('using probs cache')
             else:
-                #if generated_sequence[0] == self.tokenizer.bos_token_id:
-                    # model.generate typically adds the bos token again so we remove it here to avoid doubling up
-                #    context = self.tokenizer.decode(generated_sequence[1:], skip_special_tokens=False)
-                #else:
-                #    context = self.tokenizer.decode(generated_sequence, skip_special_tokens=False)
                 context = ""
                 for new_text in self._generate_streaming(
                     current_input_ids,
@@ -248,7 +227,8 @@ class AntiSlopSampler:
                     context += new_text
                     output_tokens_counter += 1
 
-                    # sometimes model.generate adds an extra bos token
+                    # sometimes model.generate adds an extra bos token so we'll manually clip it off.
+                    # otherwise we have conflicts with the originally calculated prompt_length
                     if prompt.startswith(self.tokenizer.bos_token) and \
                             not prompt.startswith(self.tokenizer.bos_token * 2) and \
                             context.startswith(self.tokenizer.bos_token * 2):
@@ -256,11 +236,7 @@ class AntiSlopSampler:
                     
                     if output_tokens_counter >= self.output_every_n_tokens:
                         output_tokens_counter = 0
-                        #current_text = self.tokenizer.decode(generated_sequence[prompt_length:])
-                        #print('prompt')
-                        #print([prompt])
-                        #print('context')
-                        #print([context])
+
                         if self.inference_output:
                             with self.inference_output:
                                 self.inference_output.clear_output(wait=True)
@@ -273,16 +249,14 @@ class AntiSlopSampler:
                 # (not sure if this is necessary)
                 if self.streamer_retval:
                     generated_sequence, new_logits = self.streamer_retval
-                    # sometimes model.generate adds an extra bos token
+                    # sometimes model.generate adds an extra bos token so we'll manually clip it off.
+                    # otherwise we have conflicts with the originally calculated prompt_length
                     if prompt.startswith(self.tokenizer.bos_token) and \
                             not prompt.startswith(self.tokenizer.bos_token * 2) and \
                             generated_sequence[0] == self.tokenizer.bos_token_id and \
                             generated_sequence[1] == self.tokenizer.bos_token_id:
                         generated_sequence = generated_sequence[1:]
-                    #print(generated_sequence)
-                    #print('received sequence')
-                    #print([self.tokenizer.decode(generated_sequence)])
-                    
+  
                     self.streamer_retval = None
                 else:
                     print('!! error missing retval from streamer')

@@ -109,7 +109,6 @@ class SlopPhraseHandler:
             if slow_debug:
                 debug_info = f"Slop phrase '{self.tokenizer.decode(matched_sequence)}' prob was downregulated {round(1/(adjustment**adjustment_strength), 2)}x but still selected."
                 self._display_debug(debug_info)
-                #time.sleep(debug_delay)
             return generated_sequence
 
         # Backtrack: remove tokens from the generated_sequence that are part of the disallowed sequence
@@ -217,7 +216,6 @@ class CustomSlopPhraseStoppingCriteria(StoppingCriteria):
                 continue
             candidate_sequence = tuple(self.previous_tokens[-seq_length:])
             if candidate_sequence in self.slop_phrase_sequences:
-                #print('hit! stopping early')
                 return True
         return False
 
