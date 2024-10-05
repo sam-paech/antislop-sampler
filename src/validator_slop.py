@@ -109,19 +109,19 @@ class SlopPhraseHandler:
             if slow_debug:
                 debug_info = f"Slop phrase '{self.tokenizer.decode(matched_sequence)}' prob was downregulated {round(1/(adjustment**adjustment_strength), 2)}x but still selected."
                 self._display_debug(debug_info)
-                time.sleep(debug_delay)
+                #time.sleep(debug_delay)
             return generated_sequence
 
         # Backtrack: remove tokens from the generated_sequence that are part of the disallowed sequence
         for _ in range(len(matched_sequence)):
             generated_sequence.pop()
 
-        if slow_debug:
+        if slow_debug and False:
             current_text = self.tokenizer.decode(generated_sequence[self.prompt_length:])
             with inference_output:
                 inference_output.clear_output(wait=True)
                 display(HTML(f"<div style='white-space: pre-wrap;'>{current_text}</div>"))
-            time.sleep(debug_delay)
+            #time.sleep(debug_delay)
 
         # Clear the probs_cache ahead of start_pos since we've backtracked
         to_del = [key for key in self.probs_cache if key > start_pos]

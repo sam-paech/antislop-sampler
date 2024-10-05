@@ -74,7 +74,7 @@ for token in chat_antislop(
 ### generate_antislop
 ```python
 # generate without streaming
-prompt_with_template = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+prompt_with_template = tokenizer.apply_chat_template(messages, tokenize=False)
 generated_text = generate_antislop(
     model=model,
     tokenizer=tokenizer,

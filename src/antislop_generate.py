@@ -73,7 +73,8 @@ class AntiSlopSampler:
         self.streamer_retval = None
 
     def _generate_streaming(self, current_input_ids, new_toks_to_generate, temperature, min_p, top_k, top_p, pad_token_id, stopping_criteria_args):
-        streamer = TextIteratorStreamer(self.tokenizer, skip_special_tokens=True)
+        #streamer = TextIteratorStreamer(self.tokenizer, skip_special_tokens=True)
+        streamer = TextIteratorStreamer(self.tokenizer, skip_special_tokens=False)
 
         generation_kwargs = dict(
             input_ids=current_input_ids,
@@ -116,20 +117,14 @@ class AntiSlopSampler:
 
         # Iterate over the streamer to get generated tokens
         for new_text in streamer:            
-            received_text += new_text
-            if len(received_text) < prompt_text_length:
-                continue
-            new_inference = received_text[prompt_text_length + len(processed_text):]
-            processed_text += new_inference
+            #received_text += new_text
+            #if len(received_text) < prompt_text_length:
+            #    continue
+            #new_inference = received_text[prompt_text_length + len(processed_text):]
+            #processed_text += new_inference
 
             # Encode the new part to get new tokens
             yield new_text
-            #new_tokens = self.tokenizer.encode(new_inference, add_special_tokens=False)            
-            
-            #for new_token in new_tokens:
-            #    generated_sequence.append(new_token)
-                # Yield the new token immediately
-            #    yield new_token
 
         # Wait for the generation to complete and get the output
         thread.join()
@@ -177,6 +172,7 @@ class AntiSlopSampler:
         generated_sequence = input_ids[0].tolist()
         prompt_length = len(generated_sequence)
         self.prompt_length = prompt_length
+        self.prompt_length_chars = len(self.tokenizer.decode(generated_sequence, skip_special_tokens=False))
         current_position = len(generated_sequence)  # Tracks the current position in the sequence
         output_tokens_counter = 0
         pad_token_id = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else self.tokenizer.eos_token_id
@@ -233,7 +229,12 @@ class AntiSlopSampler:
                 regenerating = True
                 #print('using probs cache')
             else:
-                context = self.tokenizer.decode(generated_sequence, skip_special_tokens=False)
+                #if generated_sequence[0] == self.tokenizer.bos_token_id:
+                    # model.generate typically adds the bos token again so we remove it here to avoid doubling up
+                #    context = self.tokenizer.decode(generated_sequence[1:], skip_special_tokens=False)
+                #else:
+                #    context = self.tokenizer.decode(generated_sequence, skip_special_tokens=False)
+                context = ""
                 for new_text in self._generate_streaming(
                     current_input_ids,
                     new_toks_to_generate,
@@ -245,24 +246,43 @@ class AntiSlopSampler:
                     stopping_criteria_args
                 ):
                     context += new_text
-                    output_tokens_counter += 1                    
+                    output_tokens_counter += 1
+
+                    # sometimes model.generate adds an extra bos token
+                    if prompt.startswith(self.tokenizer.bos_token) and \
+                            not prompt.startswith(self.tokenizer.bos_token * 2) and \
+                            context.startswith(self.tokenizer.bos_token * 2):
+                        context = context[len(self.tokenizer.bos_token):]
                     
                     if output_tokens_counter >= self.output_every_n_tokens:
                         output_tokens_counter = 0
                         #current_text = self.tokenizer.decode(generated_sequence[prompt_length:])
-
+                        #print('prompt')
+                        #print([prompt])
+                        #print('context')
+                        #print([context])
                         if self.inference_output:
                             with self.inference_output:
                                 self.inference_output.clear_output(wait=True)
-                                display(HTML(f"<div style='white-space: pre-wrap;'>{context}</div>"))
-                        #yield generated_sequence
+                                
+                                display(HTML(f"<div style='white-space: pre-wrap;'>{context[self.prompt_length_chars:]}</div>"))
+                        
                         yield self.tokenizer.encode(context, add_special_tokens=False)
 
                 # sync with the returned vals in case the streaming came thru out of order
                 # (not sure if this is necessary)
                 if self.streamer_retval:
                     generated_sequence, new_logits = self.streamer_retval
-                    #print(self.tokenizer.decode(generated_sequence))
+                    # sometimes model.generate adds an extra bos token
+                    if prompt.startswith(self.tokenizer.bos_token) and \
+                            not prompt.startswith(self.tokenizer.bos_token * 2) and \
+                            generated_sequence[0] == self.tokenizer.bos_token_id and \
+                            generated_sequence[1] == self.tokenizer.bos_token_id:
+                        generated_sequence = generated_sequence[1:]
+                    #print(generated_sequence)
+                    #print('received sequence')
+                    #print([self.tokenizer.decode(generated_sequence)])
+                    
                     self.streamer_retval = None
                 else:
                     print('!! error missing retval from streamer')
@@ -270,7 +290,7 @@ class AntiSlopSampler:
                 if self.stopping_criteria:
                     for criteria in self.stopping_criteria:
                         criteria.update_previous_tokens(generated_sequence)
-
+                #print(len(new_logits))
                 for i, logit in enumerate(new_logits):
                     self.slop_phrase_handler.probs_cache[current_position + i] = torch.softmax(logit.clone(), dim=-1)
 
@@ -348,7 +368,7 @@ class AntiSlopSampler:
 
 
         # Final display of the generated text
-        final_text = self.tokenizer.decode(generated_sequence[prompt_length:], skip_special_tokens=True)
+        final_text = self.tokenizer.decode(generated_sequence[prompt_length:], skip_special_tokens=False)
         if self.inference_output:
             with self.inference_output:
                 self.inference_output.clear_output(wait=True)
@@ -452,7 +472,7 @@ def chat_antislop(
     """
     # Build the prompt using the provided messages
     #prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-    prompt = tokenizer.apply_chat_template(messages, tokenize=False)
+    prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
 
     return generate_antislop(
         model=model,
