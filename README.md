@@ -5,8 +5,9 @@
 The AntiSlop sampler uses a backtracking mechanism to go back and revise when it encounters a disallowed word or phrase. No more testaments or tapestries or other gpt-slop.
 
 Try the sampler here: 
-[Backtracking visualisation notebook](https://colab.research.google.com/drive/1tHS3tHXbZ5PWOsP-Mbk8oK35y6otBZUn?usp=sharing)
-[Generate example notebook](https://colab.research.google.com/drive/1Rd3V4AN31cDytfmY9u80rzHXPD_dS6x9?usp=sharing)
+
+- [Backtracking visualisation notebook](https://colab.research.google.com/drive/1tHS3tHXbZ5PWOsP-Mbk8oK35y6otBZUn?usp=sharing)
+- [Generate example notebook](https://colab.research.google.com/drive/1Rd3V4AN31cDytfmY9u80rzHXPD_dS6x9?usp=sharing)
 
 
 Here it is in action (in slow mode so you can see its backtracking & revisions):
