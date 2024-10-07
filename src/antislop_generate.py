@@ -1,6 +1,7 @@
 import time
 from typing import List, Dict, Tuple, Generator, Set, Union
 from threading import Thread
+import threading
 from queue import Queue
 import torch
 from transformers import (
@@ -92,38 +93,69 @@ class AntiSlopSampler:
             **stopping_criteria_args
         )
 
-        # Create a Queue to store the generation output
+        # Create an Event to signal thread termination
+        stop_event = threading.Event()
+
+        # Create a Queue to store the generation output or errors
         output_queue = Queue()
 
         # Define a function to run generation and put the result in the queue
-        def generate_and_queue():
+        def generate_and_queue():            
             try:
                 output = self.model.generate(**generation_kwargs)
-                output_queue.put(output)
+                if not stop_event.is_set():
+                    output_queue.put((output, None))  # None means no exception occurred
             except Exception as e:
                 print(f"Exception during generation: {e}")  # Debug print
-                output_queue.put(e)
+                if not stop_event.is_set():
+                    output_queue.put((None, e))  # Put the exception in the queue
+                stop_event.set()
 
         # Start the generation in a separate thread
         thread = Thread(target=generate_and_queue)
         thread.start()
 
-        for new_text in streamer:
-            yield new_text
+        try:
+            for new_text in streamer:
+                yield new_text
+        except Exception as e:
+            print(f"Exception during streaming: {e}")  # Debug print
+            # Add the exception to the output queue so it is propagated to the caller
+            if not stop_event.is_set():
+                output_queue.put((None, e))  # Handle exception during streaming
+        #finally:
+        #    stop_event.set()  # Signal the thread to stop
 
-        # Wait for the generation to complete and get the output
+        # Wait for the generation to complete or for the thread to be terminated
         thread.join()
-        generation_output = output_queue.get()
 
-        # Check if an exception occurred during generation
-        if isinstance(generation_output, Exception):
-            raise generation_output
+        # Initialize default empty lists for output variables
+        generated_sequence = []
+        new_logits = []
+        error = None  # Default error to None
 
-        # Extract logits from the generation output
-        new_logits = generation_output.logits
-        generated_sequence = generation_output.sequences[0].tolist()        
+        # Check if there's any output in the queue
+        if not output_queue.empty():
+            generation_output, error = output_queue.get()
 
-        self.streamer_retval = (generated_sequence, new_logits)
+            # Check if an error occurred during generation or streaming
+            if error:
+                print(f"Generation or streaming failed: {error}")
+            else:
+                # Extract logits and sequence from the generation output
+                new_logits = generation_output.logits
+                generated_sequence = generation_output.sequences[0].tolist()
+
+        # Add final debug information for empty output
+        if not generated_sequence:
+            print("Warning: Generated sequence is empty.")
+        if not new_logits:
+            print("Warning: Logits are empty.")
+
+        # Return the generated sequence, logits, and any error
+        self.streamer_retval = (generated_sequence, new_logits, error)
+
+
 
     @torch.no_grad()
     def generate_stream(
@@ -221,6 +253,7 @@ class AntiSlopSampler:
                 regenerating = True
             else:
                 context = ""
+                #print(new_toks_to_generate)
                 for new_text in self._generate_streaming(
                     current_input_ids,
                     new_toks_to_generate,
@@ -254,8 +287,16 @@ class AntiSlopSampler:
 
                 # sync with the returned vals in case the streaming came thru out of order
                 # (not sure if this is necessary)
-                if self.streamer_retval:
-                    generated_sequence, new_logits = self.streamer_retval
+                if self.streamer_retval:                    
+                    generated_sequence, new_logits, error = self.streamer_retval
+                    if error:
+                        yield []
+                        return
+                    #if not generated_sequence:
+                        # Model failed to return any tokens; likely an error so we'll return an empty list.
+                    #    yield []
+                    #    return
+                    
                     # sometimes model.generate adds an extra bos token so we'll manually clip it off.
                     # otherwise we have conflicts with the originally calculated prompt_length
                     if prompt.startswith(self.tokenizer.bos_token) and \
@@ -267,6 +308,8 @@ class AntiSlopSampler:
                     self.streamer_retval = None
                 else:
                     print('!! error missing retval from streamer')
+                    yield []
+                    return
 
                 if self.stopping_criteria:
                     for criteria in self.stopping_criteria:

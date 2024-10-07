@@ -3,7 +3,7 @@ import os
 import argparse
 from typing import List, Dict, Union, Optional, Any, AsyncGenerator, Tuple
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 import uvicorn
@@ -20,7 +20,7 @@ from transformers import (
 )
 
 # Set up logging
-logging.basicConfig(level=logging.INFO)  # Changed to INFO for cleaner logs
+logging.basicConfig(level=logging.INFO)  # Set to DEBUG for more detailed logs
 logger = logging.getLogger(__name__)
 
 # Import your custom antislop_generate module
@@ -34,11 +34,9 @@ tokenizer: Optional[PreTrainedTokenizer] = None
 DEFAULT_SLOP_ADJUSTMENTS: Dict[str, float] = {}
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# Import asyncio for semaphore
+# Define a global asyncio.Lock to enforce single concurrency
 import asyncio
-
-# Initialize a global semaphore with concurrency of 1
-request_semaphore = asyncio.Semaphore(1)
+lock = asyncio.Lock()
 
 # Define Pydantic models for request and response schemas
 
@@ -55,7 +53,7 @@ class CompletionRequest(BaseModel):
         default=None,
         description="List of slop phrases and their adjustment values, e.g., [['a testament to', 0.3], ['tapestry of', 0.1]]"
     )
-    adjustment_strength: Optional[float] = Field(default=1.0, ge=0.0, description="Strength of adjustments")
+    adjustment_strength: Optional[float] = Field(default=10.0, ge=0.0, description="Strength of adjustments")
     enforce_json: Optional[bool] = Field(default=False, description="Enforce JSON formatting")
     antislop_enabled: Optional[bool] = Field(default=True, description="Enable AntiSlop functionality")
 
@@ -78,7 +76,7 @@ class ChatCompletionRequest(BaseModel):
         default=None,
         description="List of slop phrases and their adjustment values, e.g., [['a testament to', 0.3], ['tapestry of', 0.1]]"
     )
-    adjustment_strength: Optional[float] = Field(default=1.0, ge=0.0, description="Strength of adjustments")
+    adjustment_strength: Optional[float] = Field(default=10.0, ge=0.0, description="Strength of adjustments")
     enforce_json: Optional[bool] = Field(default=False, description="Enforce JSON formatting")
     antislop_enabled: Optional[bool] = Field(default=True, description="Enable AntiSlop functionality")
 
@@ -118,7 +116,6 @@ class ChatCompletionResponse(BaseModel):
 
 import uuid
 import time
-import asyncio
 import queue  # Import queue for thread-safe communication
 
 def generate_id() -> str:
@@ -164,7 +161,12 @@ async def load_model_and_tokenizer():
         raise ValueError("Cannot set both LOAD_IN_4BIT and LOAD_IN_8BIT. Choose one.")
 
     # Load slop phrase adjustments from file if provided
-    DEFAULT_SLOP_ADJUSTMENTS = load_slop_adjustments(slop_adjustments_file)
+    try:
+        DEFAULT_SLOP_ADJUSTMENTS = load_slop_adjustments(slop_adjustments_file)
+        logger.info(f"Loaded {len(DEFAULT_SLOP_ADJUSTMENTS)} slop phrase adjustments.")
+    except Exception as e:
+        logger.error(f"Failed to load slop adjustments: {e}")
+        DEFAULT_SLOP_ADJUSTMENTS = {}
 
     logger.info(f"Using device: {device}")
 
@@ -236,6 +238,10 @@ def generate_id() -> str:
     return str(uuid.uuid4())
 
 
+def current_timestamp() -> int:
+    return int(time.time())
+
+
 async def stream_tokens_sync(generator: Any, is_chat: bool = False) -> AsyncGenerator[str, None]:
     """
     Converts a synchronous generator to an asynchronous generator for streaming responses.
@@ -245,20 +251,26 @@ async def stream_tokens_sync(generator: Any, is_chat: bool = False) -> AsyncGene
 
     def generator_thread():
         try:
+            logger.debug("Generator thread started.")
             for token in generator:
                 q.put(token)
+                logger.debug(f"Token put into queue: {token}")
             q.put(None)  # Signal completion
+            logger.debug("Generator thread completed.")
         except Exception as e:
+            logger.error(f"Exception in generator_thread: {e}")
             q.put(e)  # Signal exception
 
     # Start the generator in a separate daemon thread
     thread = threading.Thread(target=generator_thread, daemon=True)
     thread.start()
+    logger.debug("Generator thread initiated.")
 
-    while True:
-        try:
-            # Retrieve the next token from the queue in a non-blocking way
+    try:
+        while True:
             token = await asyncio.to_thread(q.get)
+            logger.debug(f"Token retrieved from queue: {token}")
+
             if token is None:
                 # Send final finish_reason to indicate the end of the stream
                 finish_data = {
@@ -271,7 +283,9 @@ async def stream_tokens_sync(generator: Any, is_chat: bool = False) -> AsyncGene
                     ]
                 }
                 yield f"data: {json.dumps(finish_data)}\n\n"
+                logger.debug("Finished streaming tokens.")
                 break
+
             if isinstance(token, Exception):
                 # Handle exceptions by sending a finish_reason with 'error'
                 error_data = {
@@ -284,10 +298,12 @@ async def stream_tokens_sync(generator: Any, is_chat: bool = False) -> AsyncGene
                     ]
                 }
                 yield f"data: {json.dumps(error_data)}\n\n"
-                raise token  # Re-raise the exception after notifying the client
+                logger.error(f"Exception during token streaming: {token}")
+                break  # Exit the loop after handling the error
 
             # Decode the token to text
             text = tokenizer.decode([token], skip_special_tokens=False)
+            logger.debug(f"Decoded token: {text}")
 
             # Prepare the data in OpenAI's streaming format
             data = {
@@ -302,92 +318,92 @@ async def stream_tokens_sync(generator: Any, is_chat: bool = False) -> AsyncGene
 
             # Yield the formatted data as a Server-Sent Event (SSE)
             yield f"data: {json.dumps(data)}\n\n"
+            logger.debug("Yielded token to client.")
 
             # Yield control back to the event loop
             await asyncio.sleep(0)
-        except Exception as e:
-            logger.error(f"Error in stream_tokens_sync: {e}")
-            # Optionally, notify the client about the error
-            error_data = {
-                "choices": [
-                    {
-                        "delta": {},
-                        "index": 0,
-                        "finish_reason": "error"
-                    }
-                ]
-            }
-            yield f"data: {json.dumps(error_data)}\n\n"
-            break  # Exit the loop after handling the error
+
+    except asyncio.CancelledError:
+        logger.warning("Streaming task was cancelled by the client.")
+    except Exception as e:
+        logger.error(f"Unexpected error in stream_tokens_sync: {e}")
+    finally:
+        logger.debug("Exiting stream_tokens_sync.")
 
 
 # Endpoint: /v1/completions
 @app.post("/v1/completions", response_model=CompletionResponse)
-async def completions(request: CompletionRequest):
+async def completions(request: CompletionRequest, req: Request):
+    logger.info("Completion request received, waiting for processing...")
     try:
-        logger.info("Completion request received, waiting for processing...")
-        await request_semaphore.acquire()
-        logger.info("Processing completion request...")
-        try:
-            if model is None or tokenizer is None:
-                raise HTTPException(status_code=500, detail="Model and tokenizer are not loaded.")
+        if model is None or tokenizer is None:
+            logger.error("Model and tokenizer are not loaded.")
+            raise HTTPException(status_code=500, detail="Model and tokenizer are not loaded.")
 
-            # Use the model specified in the request or default
-            used_model = request.model if request.model else model.config.name_or_path
+        # Use the model specified in the request or default
+        used_model = request.model if request.model else model.config.name_or_path
 
-            # Handle prompt as string or list
-            if isinstance(request.prompt, list):
-                prompt = "\n".join(request.prompt)
-            else:
-                prompt = request.prompt
+        # Handle prompt as string or list
+        if isinstance(request.prompt, list):
+            prompt = "\n".join(request.prompt)
+        else:
+            prompt = request.prompt
 
-            # Process slop_phrases parameter
-            if request.slop_phrases is not None:
-                # Convert list of tuples to dictionary
-                slop_adjustments = dict(request.slop_phrases)
-            else:
-                # Use default slop_phrase_prob_adjustments
-                slop_adjustments = DEFAULT_SLOP_ADJUSTMENTS.copy()
+        # Process slop_phrases parameter
+        if request.slop_phrases is not None:
+            # Convert list of tuples to dictionary
+            slop_adjustments = dict(request.slop_phrases)
+            logger.debug(f"Slop adjustments provided: {slop_adjustments}")
+        else:
+            # Use default slop_phrase_prob_adjustments
+            slop_adjustments = DEFAULT_SLOP_ADJUSTMENTS.copy()
+            logger.debug(f"Using default slop adjustments with {len(slop_adjustments)} entries.")
 
-            # Call the generate_antislop function
-            if request.stream:
-                # Streaming response
-                generator_source = generate_antislop(
-                    model=model,
-                    tokenizer=tokenizer,
-                    prompt=prompt,
-                    max_new_tokens=request.max_tokens,
-                    temperature=request.temperature,
-                    top_k=request.top_k,
-                    top_p=request.top_p,
-                    min_p=request.min_p,
-                    slop_phrase_prob_adjustments=slop_adjustments,
-                    adjustment_strength=request.adjustment_strength,
-                    device=device,
-                    streaming=True,
-                    slow_debug=False,  # Adjust as needed
-                    output_every_n_tokens=1,
-                    debug_delay=0.0,
-                    inference_output=None,
-                    debug_output=None,
-                    enforce_json=request.enforce_json,
-                    antislop_enabled=request.antislop_enabled,
-                )
+        if request.stream:
+            logger.info("Streaming completion request started.")
+            # Streaming response
+            generator_source = generate_antislop(
+                model=model,
+                tokenizer=tokenizer,
+                prompt=prompt,
+                max_new_tokens=request.max_tokens,
+                temperature=request.temperature,
+                top_k=request.top_k,
+                top_p=request.top_p,
+                min_p=request.min_p,
+                slop_phrase_prob_adjustments=slop_adjustments,
+                adjustment_strength=request.adjustment_strength,
+                device=device,
+                streaming=True,
+                slow_debug=False,  # Adjust as needed
+                output_every_n_tokens=1,
+                debug_delay=0.0,
+                inference_output=None,
+                debug_output=None,
+                enforce_json=request.enforce_json,
+                antislop_enabled=request.antislop_enabled,
+            )
 
-                async def streaming_generator():
+            async def streaming_generator():
+                async with lock:
+                    logger.info("Lock acquired for streaming completion request.")
                     try:
                         async for token in stream_tokens_sync(generator_source, is_chat=False):
                             yield token
+                    except Exception as e:
+                        logger.error(f"Exception in streaming_generator: {e}")
                     finally:
-                        request_semaphore.release()
-                        logger.info("Completion request processing completed.")
+                        logger.info("Streaming generator completed and lock released.")
 
-                return StreamingResponse(
-                    streaming_generator(),
-                    media_type="text/event-stream"
-                )
+            return StreamingResponse(
+                streaming_generator(),
+                media_type="text/event-stream"
+            )
 
-            else:
+        else:
+            logger.info("Non-streaming completion request started.")
+            async with lock:
+                logger.info("Lock acquired for non-streaming completion request.")
                 # Non-streaming response
                 generated_tokens = generate_antislop(
                     model=model,
@@ -411,110 +427,111 @@ async def completions(request: CompletionRequest):
                     antislop_enabled=request.antislop_enabled,
                 )
 
-                # Decode the tokens
-                text = tokenizer.decode(generated_tokens, skip_special_tokens=False)
+            # Decode the tokens
+            text = tokenizer.decode(generated_tokens, skip_special_tokens=False)
+            logger.debug(f"Generated text: {text}")
 
-                # Create the response
-                response = CompletionResponse(
-                    id=generate_id(),
-                    object="text_completion",
-                    created=current_timestamp(),
-                    model=used_model,
-                    choices=[
-                        CompletionChoice(
-                            text=text,
-                            index=0,
-                            logprobs=None,
-                            finish_reason="length" if request.max_tokens else "stop"
-                        )
-                    ],
-                    usage={
-                        "prompt_tokens": len(tokenizer.encode(prompt)),
-                        "completion_tokens": len(generated_tokens),
-                        "total_tokens": len(tokenizer.encode(prompt)) + len(generated_tokens),
-                    }
-                )
-                logger.info("Completion request processing completed.")
-                return response
-
-        except Exception as e:
-            logger.error(f"Error during completion processing: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+            # Create the response
+            response = CompletionResponse(
+                id=generate_id(),
+                object="text_completion",
+                created=current_timestamp(),
+                model=used_model,
+                choices=[
+                    CompletionChoice(
+                        text=text,
+                        index=0,
+                        logprobs=None,
+                        finish_reason="length" if request.max_tokens else "stop"
+                    )
+                ],
+                usage={
+                    "prompt_tokens": len(tokenizer.encode(prompt)),
+                    "completion_tokens": len(generated_tokens),
+                    "total_tokens": len(tokenizer.encode(prompt)) + len(generated_tokens),
+                }
+            )
+            logger.info("Completion request processing completed.")
+            return response
 
     except Exception as e:
-        logger.error(f"Error in /v1/completions: {e}")
-        # Ensure semaphore is released in case of unexpected errors
-        if request_semaphore.locked():
-            request_semaphore.release()
-            logger.info("Semaphore released due to an error.")
+        logger.error(f"Error during completion processing: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        logger.debug("Exiting /v1/completions endpoint.")
 
 
 # Endpoint: /v1/chat/completions
 @app.post("/v1/chat/completions", response_model=ChatCompletionResponse)
-async def chat_completions(request: ChatCompletionRequest):
+async def chat_completions(request: ChatCompletionRequest, req: Request):
+    logger.info("Chat completion request received, waiting for processing...")
     try:
-        logger.info("Chat completion request received, waiting for processing...")
-        await request_semaphore.acquire()
-        logger.info("Processing chat completion request...")
-        try:
-            if model is None or tokenizer is None:
-                raise HTTPException(status_code=500, detail="Model and tokenizer are not loaded.")
+        if model is None or tokenizer is None:
+            logger.error("Model and tokenizer are not loaded.")
+            raise HTTPException(status_code=500, detail="Model and tokenizer are not loaded.")
 
-            # Use the model specified in the request or default
-            used_model = request.model if request.model else model.config.name_or_path
+        # Use the model specified in the request or default
+        used_model = request.model if request.model else model.config.name_or_path
 
-            # Build the prompt from chat messages
-            prompt = "\n".join([f"{msg.role}: {msg.content}" for msg in request.messages])
+        # Build the prompt from chat messages
+        prompt = "\n".join([f"{msg.role}: {msg.content}" for msg in request.messages])
+        logger.debug(f"Constructed prompt from messages: {prompt}")
 
-            # Process slop_phrases parameter
-            if request.slop_phrases is not None:
-                # Convert list of tuples to dictionary
-                slop_adjustments = dict(request.slop_phrases)
-            else:
-                # Use default slop_phrase_prob_adjustments
-                slop_adjustments = DEFAULT_SLOP_ADJUSTMENTS.copy()
+        # Process slop_phrases parameter
+        if request.slop_phrases is not None:
+            # Convert list of tuples to dictionary
+            slop_adjustments = dict(request.slop_phrases)
+            logger.debug(f"Slop adjustments provided: {slop_adjustments}")
+        else:
+            # Use default slop_phrase_prob_adjustments
+            slop_adjustments = DEFAULT_SLOP_ADJUSTMENTS.copy()
+            logger.debug(f"Using default slop adjustments with {len(slop_adjustments)} entries.")
 
-            if request.stream:
-                logger.info("Streaming chat completion request...")
-                # Streaming response
-                generator_source = chat_antislop(
-                    model=model,
-                    tokenizer=tokenizer,
-                    messages=[msg.dict() for msg in request.messages],
-                    max_new_tokens=request.max_tokens,
-                    temperature=request.temperature,
-                    top_k=request.top_k,
-                    top_p=request.top_p,
-                    min_p=request.min_p,
-                    slop_phrase_prob_adjustments=slop_adjustments,
-                    adjustment_strength=request.adjustment_strength,
-                    device=device,
-                    streaming=True,
-                    slow_debug=False,  # Adjust as needed
-                    output_every_n_tokens=1,
-                    debug_delay=0.0,
-                    inference_output=None,
-                    debug_output=None,
-                    enforce_json=request.enforce_json,
-                    antislop_enabled=request.antislop_enabled,
-                )
+        if request.stream:
+            logger.info("Streaming chat completion request started.")
+            # Streaming response
+            generator_source = chat_antislop(
+                model=model,
+                tokenizer=tokenizer,
+                messages=[msg.dict() for msg in request.messages],
+                max_new_tokens=request.max_tokens,
+                temperature=request.temperature,
+                top_k=request.top_k,
+                top_p=request.top_p,
+                min_p=request.min_p,
+                slop_phrase_prob_adjustments=slop_adjustments,
+                adjustment_strength=request.adjustment_strength,
+                device=device,
+                streaming=True,
+                slow_debug=False,  # Adjust as needed
+                output_every_n_tokens=1,
+                debug_delay=0.0,
+                inference_output=None,
+                debug_output=None,
+                enforce_json=request.enforce_json,
+                antislop_enabled=request.antislop_enabled,
+            )
 
-                async def streaming_generator():
+            async def streaming_generator():
+                async with lock:
+                    logger.info("Lock acquired for streaming chat completion request.")
                     try:
                         async for token in stream_tokens_sync(generator_source, is_chat=True):
                             yield token
+                    except Exception as e:
+                        logger.error(f"Exception in streaming_generator: {e}")
                     finally:
-                        request_semaphore.release()
-                        logger.info("Chat completion request processing completed.")
+                        logger.info("Streaming generator completed and lock released.")
 
-                return StreamingResponse(
-                    streaming_generator(),
-                    media_type="text/event-stream"
-                )
+            return StreamingResponse(
+                streaming_generator(),
+                media_type="text/event-stream"
+            )
 
-            else:
-                logger.info("Non-streaming chat completion request...")
+        else:
+            logger.info("Non-streaming chat completion request started.")
+            async with lock:
+                logger.info("Lock acquired for non-streaming chat completion request.")
                 # Non-streaming response
                 generated_tokens = chat_antislop(
                     model=model,
@@ -538,42 +555,37 @@ async def chat_completions(request: ChatCompletionRequest):
                     antislop_enabled=request.antislop_enabled,
                 )
 
-                # Decode the tokens
-                text = tokenizer.decode(generated_tokens, skip_special_tokens=False)
+            # Decode the tokens
+            text = tokenizer.decode(generated_tokens, skip_special_tokens=False)
+            logger.debug(f"Generated chat text: {text}")
 
-                # Create the response
-                response = ChatCompletionResponse(
-                    id=generate_id(),
-                    object="chat.completion",
-                    created=current_timestamp(),
-                    model=used_model,
-                    choices=[
-                        ChatCompletionChoice(
-                            message=ChatCompletionMessage(role="assistant", content=text),
-                            index=0,
-                            finish_reason="length" if request.max_tokens else "stop"
-                        )
-                    ],
-                    usage={
-                        "prompt_tokens": len(tokenizer.encode(prompt)),
-                        "completion_tokens": len(generated_tokens),
-                        "total_tokens": len(tokenizer.encode(prompt)) + len(generated_tokens),
-                    }
-                )
-                logger.info("Chat completion request processing completed.")
-                return response
-
-        except Exception as e:
-            logger.error(f"Error during chat completion processing: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+            # Create the response
+            response = ChatCompletionResponse(
+                id=generate_id(),
+                object="chat.completion",
+                created=current_timestamp(),
+                model=used_model,
+                choices=[
+                    ChatCompletionChoice(
+                        message=ChatCompletionMessage(role="assistant", content=text),
+                        index=0,
+                        finish_reason="length" if request.max_tokens else "stop"
+                    )
+                ],
+                usage={
+                    "prompt_tokens": len(tokenizer.encode(prompt)),
+                    "completion_tokens": len(generated_tokens),
+                    "total_tokens": len(tokenizer.encode(prompt)) + len(generated_tokens),
+                }
+            )
+            logger.info("Chat completion request processing completed.")
+            return response
 
     except Exception as e:
-        logger.error(f"Error in /v1/chat/completions: {e}")
-        # Ensure semaphore is released in case of unexpected errors
-        if request_semaphore.locked():
-            request_semaphore.release()
-            logger.info("Semaphore released due to an error.")
+        logger.error(f"Error during chat completion processing: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        logger.debug("Exiting /v1/chat/completions endpoint.")
 
 
 # Main function to parse arguments and start Uvicorn
@@ -614,11 +626,6 @@ def main():
         default=8000,
         help="Port number to bind the server to."
     )
-    parser.add_argument(
-        "--no_reload",
-        action="store_true",
-        help="Disable auto-reloading (useful for production)."
-    )
 
     args = parser.parse_args()
 
@@ -629,15 +636,16 @@ def main():
     if args.slop_adjustments_file:
         os.environ["SLOP_ADJUSTMENTS_FILE"] = args.slop_adjustments_file
 
-    # Run the app using Uvicorn
+    # Run the app using Uvicorn with single worker and single thread
     uvicorn.run(
-        "run_api:app",
+        "run_api:app",  # Ensure this matches the filename if different
         host=args.host,
         port=args.port,
-        reload=not args.no_reload,
-        log_level="info",
-        # Increase timeout settings if necessary
+        reload=False,
+        log_level="info",  # Set to DEBUG for more detailed logs
         timeout_keep_alive=600,  # 10 minutes
+        workers=1,  # Single worker to enforce global lock
+        loop="asyncio",  # Ensure using asyncio loop
     )
 
 
