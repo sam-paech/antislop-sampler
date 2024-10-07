@@ -151,7 +151,7 @@ class SlopPhraseHandler:
             self._display_debug(debug_info)
 
             if self.slow_debug:
-                time.sleep(self.debug_delay)
+                #time.sleep(self.debug_delay)
                 if self.debug_output:
                     with self.debug_output:
                         self.debug_output.clear_output(wait=True)                        

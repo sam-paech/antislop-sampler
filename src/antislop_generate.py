@@ -155,9 +155,16 @@ class AntiSlopSampler:
         # Encode the prompt
         input_ids = self.tokenizer.encode(prompt, return_tensors="pt").to(self.device)
         generated_sequence = input_ids[0].tolist()
-        prompt_length = len(generated_sequence)
-        self.prompt_length = prompt_length
-        self.prompt_length_chars = len(self.tokenizer.decode(generated_sequence, skip_special_tokens=False))
+
+        # If the prompt already came with a bos token, we don't want to add it again
+        if prompt.startswith(self.tokenizer.bos_token) and \
+                not prompt.startswith(self.tokenizer.bos_token * 2) and \
+                generated_sequence[0] == self.tokenizer.bos_token_id and \
+                generated_sequence[1] == self.tokenizer.bos_token_id:
+            generated_sequence = generated_sequence[1:]
+
+        self.prompt_length = len(generated_sequence)
+        self.prompt_length_chars = len(prompt)
         current_position = len(generated_sequence)  # Tracks the current position in the sequence
         output_tokens_counter = 0
         pad_token_id = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else self.tokenizer.eos_token_id
@@ -165,7 +172,7 @@ class AntiSlopSampler:
         filtered_logits = None
 
         if max_length != None:
-            this_max_new_tokens = max_length - prompt_length
+            this_max_new_tokens = max_length - self.prompt_length
             if this_max_new_tokens < 0:
                 this_max_new_tokens = 0
             if max_new_tokens == None or this_max_new_tokens < max_new_tokens:
@@ -178,7 +185,7 @@ class AntiSlopSampler:
             json_stopping_criteria = JSONValidationStoppingCriteria(
                 tokenizer=self.tokenizer,
                 json_validator=self.json_validator,
-                prompt_length=prompt_length
+                prompt_length=self.prompt_length
             )
             self.stopping_criteria.append(json_stopping_criteria)
 
@@ -198,11 +205,11 @@ class AntiSlopSampler:
         
 
         while True:            
-            if max_new_tokens is not None and len(generated_sequence) - prompt_length >= max_new_tokens:
+            if max_new_tokens is not None and len(generated_sequence) - self.prompt_length >= max_new_tokens:
                 #print('max_new_tokens reached')
                 break
 
-            new_toks_to_generate = max_new_tokens - (len(generated_sequence) - prompt_length)            
+            new_toks_to_generate = max_new_tokens - (len(generated_sequence) - self.prompt_length)            
 
             current_input_ids = torch.tensor([generated_sequence], device=self.device)
 
@@ -289,7 +296,7 @@ class AntiSlopSampler:
 
                 if output_tokens_counter >= self.output_every_n_tokens:
                     output_tokens_counter = 0
-                    current_text = self.tokenizer.decode(generated_sequence[prompt_length:])
+                    current_text = self.tokenizer.decode(generated_sequence[self.prompt_length:])
                     if self.inference_output:
                         with self.inference_output:
                             self.inference_output.clear_output(wait=True)
@@ -301,8 +308,7 @@ class AntiSlopSampler:
             if regenerating and self.slow_debug:
                 alt_token = self.tokenizer.decode(next_token, skip_special_tokens=True)
                 debug_info = f"Alternate token: {[alt_token]}"
-                #print(next_token, self.json_validator.last_downregulated_token)
-                
+
                 self._display_debug(debug_info)
                 if self.slow_debug:
                     time.sleep(self.debug_delay)
@@ -325,7 +331,7 @@ class AntiSlopSampler:
 
             # JSON validation
             if self.enforce_json:
-                result = self.json_validator.validate_json_string(generated_sequence, prompt_length, self.slop_phrase_handler.probs_cache)
+                result = self.json_validator.validate_json_string(generated_sequence, self.prompt_length, self.slop_phrase_handler.probs_cache)
                 if result != False:
                     generated_sequence = result
                     current_position = len(generated_sequence)
@@ -333,7 +339,7 @@ class AntiSlopSampler:
 
             # After adding the token, check for disallowed sequences
             if self.antislop_enabled:
-                antislop_result = self.slop_phrase_handler.deslop(generated_sequence, prompt_length)
+                antislop_result = self.slop_phrase_handler.deslop(generated_sequence, self.prompt_length)
                 if antislop_result != False:
                     generated_sequence = antislop_result
                     current_position = len(generated_sequence)
@@ -342,7 +348,7 @@ class AntiSlopSampler:
 
 
         # Final display of the generated text
-        final_text = self.tokenizer.decode(generated_sequence[prompt_length:], skip_special_tokens=False)
+        final_text = self.tokenizer.decode(generated_sequence[self.prompt_length:], skip_special_tokens=False)
         if self.inference_output:
             with self.inference_output:
                 self.inference_output.clear_output(wait=True)
@@ -445,8 +451,7 @@ def chat_antislop(
             If streaming is False, returns a list of generated token IDs.
     """
     # Build the prompt using the provided messages
-    #prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-    prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
+    prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
 
     return generate_antislop(
         model=model,
