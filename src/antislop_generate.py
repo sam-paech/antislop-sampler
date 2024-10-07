@@ -731,37 +731,19 @@ def _generate_antislop(
         print('! prompt is empty')
         return
     buffer_size = sampler.slop_phrase_handler.max_slop_phrase_length + 5
-    tokens_to_wait = buffer_size
-    
-        
+
     last_released_position = len(prompt_tokens) - 1
-    last_sequence_length = len(prompt_tokens)
-
-    num_new_tokens = 0
     for generated_sequence in token_stream:
-        current_length = len(generated_sequence)
-        #print(tokenizer.decode(generated_sequence))
-
-        if current_length <= last_sequence_length:
-            tokens_to_wait += last_sequence_length - current_length
-            
-        else:
-            if tokens_to_wait > 0:
-                tokens_to_wait -= 1
-            else:                    
+        sequence_len = len(generated_sequence)
+        if sequence_len - last_released_position > buffer_size:
+            while sequence_len - last_released_position > buffer_size:
                 last_released_position += 1
                 token_to_release = generated_sequence[last_released_position]
                 yield token_to_release
-                num_new_tokens += 1
-
-        last_sequence_length = current_length
 
     # Release any remaining tokens after generation is complete
     if last_released_position < len(generated_sequence)-1:
-        for tok in generated_sequence[last_released_position+1:]:
+        for tok in generated_sequence[last_released_position+1:]:            
             yield tok
-            num_new_tokens += 1
-            if max_new_tokens is not None and num_new_tokens >= max_new_tokens:
-                del sampler
-                return
+            time.sleep(0.02)
     del sampler
