@@ -57,7 +57,7 @@ class CompletionRequest(BaseModel):
         default=None,
         description="List of slop phrases and their adjustment values, e.g., [['a testament to', 0.3], ['tapestry of', 0.1]]"
     )
-    adjustment_strength: Optional[float] = Field(default=10.0, ge=0.0, description="Strength of adjustments")
+    adjustment_strength: Optional[float] = Field(default=20.0, ge=0.0, description="Strength of adjustments")
     enforce_json: Optional[bool] = Field(default=False, description="Enforce JSON formatting")
     antislop_enabled: Optional[bool] = Field(default=True, description="Enable AntiSlop functionality")
 
@@ -80,7 +80,7 @@ class ChatCompletionRequest(BaseModel):
         default=None,
         description="List of slop phrases and their adjustment values, e.g., [['a testament to', 0.3], ['tapestry of', 0.1]]"
     )
-    adjustment_strength: Optional[float] = Field(default=10.0, ge=0.0, description="Strength of adjustments")
+    adjustment_strength: Optional[float] = Field(default=20.0, ge=0.0, description="Strength of adjustments")
     enforce_json: Optional[bool] = Field(default=False, description="Enforce JSON formatting")
     antislop_enabled: Optional[bool] = Field(default=True, description="Enable AntiSlop functionality")
 
