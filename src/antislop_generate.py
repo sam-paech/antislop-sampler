@@ -289,6 +289,8 @@ class AntiSlopSampler:
                         
                         yield self.tokenizer.encode(context, add_special_tokens=False)
 
+                torch.cuda.empty_cache()
+
                 # sync with the returned vals in case the streaming came thru out of order
                 # (not sure if this is necessary)
                 if self.streamer_retval:                    
@@ -405,7 +407,7 @@ class AntiSlopSampler:
 
         # Clear variables to free up memory
         del next_token_logits, filtered_logits
-        self._clear_gpu_memory()
+        torch.cuda.empty_cache()
 
 
     def _filter_probs(self, probs: torch.FloatTensor, top_k: int, top_p: float, min_p: float) -> torch.FloatTensor:
@@ -449,12 +451,9 @@ class AntiSlopSampler:
         else:
             print(message)
 
-    def _clear_gpu_memory(self):
-        def clear_gpu_memory():
-            while True:
-                torch.cuda.empty_cache()
-                # Sleep for a certain interval (e.g., 5 minutes)
-                threading.Event().wait(300)
+    def _clear_gpu_memory_async(self):
+        def clear_gpu_memory():        
+            torch.cuda.empty_cache()            
 
         # Create and start the daemon thread
         cleaner_thread = threading.Thread(target=clear_gpu_memory, daemon=True)

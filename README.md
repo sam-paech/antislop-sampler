@@ -31,6 +31,7 @@ open-webui serve
 ### start the openai compatible antislop server:
 ```bash
 git clone https://github.com/sam-paech/antislop-sampler.git && cd antislop-sampler
+pip install fastapi uvicorn ipywidgets IPython transformers bitsandbytes accelerate
 python3 run_api.py --model unsloth/Llama-3.2-3B-Instruct --slop_adjustments_file slop_phrase_prob_adjustments.json
 ```
 
@@ -38,7 +39,8 @@ python3 run_api.py --model unsloth/Llama-3.2-3B-Instruct --slop_adjustments_file
 - browse to http://localhost:8080
 - go to admin panel --> settings --> connections
 - set the OpenAI API url to http://0.0.0.0:8000/v1
-- set password to anything (it's not used)
+- set api key to anything (it's not used)
+- click save (!!)
 - click the refresh icon to verify the connection; should see a success message
 
 Now it should be all configured! Start a new chat, select the model, and give it a try.
