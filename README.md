@@ -9,8 +9,11 @@ Try the sampler here:
 - [Backtracking visualisation notebook](https://colab.research.google.com/drive/1tHS3tHXbZ5PWOsP-Mbk8oK35y6otBZUn?usp=sharing)
 - [Generate example notebook](https://colab.research.google.com/drive/1Rd3V4AN31cDytfmY9u80rzHXPD_dS6x9?usp=sharing)
 
+
+### How to use the sampler with a local chat UI (open-webui)
+
 <details>
-<summary>### How to set up open-webui with the sampler</summary>
+<summary>[Click to view instructions]</summary>
 
 ### if you want to run in an isolated environment (note: open-webui requires python 3.11):
 ```bash
