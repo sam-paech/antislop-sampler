@@ -245,7 +245,13 @@ async def load_model_and_tokenizer():
             logger.info("Model loaded in 8-bit precision.")
         else:
             # Load model normally
-            model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.bfloat16).to(device)
+            model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.bfloat16)
+            try:
+                model.to(device)
+            except Exception as e:
+                # if an already quantised model is loaded, the model.to(device) will
+                # throw a benign error that we can ignore.
+                print(e)
             logger.info("Model loaded in 16-bit precision.")
     except Exception as e:
         logger.error(f"Error loading model: {e}")

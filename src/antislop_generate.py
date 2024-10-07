@@ -188,7 +188,8 @@ class AntiSlopSampler:
         generated_sequence = input_ids[0].tolist()
 
         # If the prompt already came with a bos token, we don't want to add it again
-        if prompt.startswith(self.tokenizer.bos_token) and \
+        if self.tokenizer.bos_token and \
+                prompt.startswith(self.tokenizer.bos_token) and \
                 not prompt.startswith(self.tokenizer.bos_token * 2) and \
                 generated_sequence[0] == self.tokenizer.bos_token_id and \
                 generated_sequence[1] == self.tokenizer.bos_token_id:
@@ -271,7 +272,8 @@ class AntiSlopSampler:
 
                     # sometimes model.generate adds an extra bos token so we'll manually clip it off.
                     # otherwise we have conflicts with the originally calculated prompt_length
-                    if prompt.startswith(self.tokenizer.bos_token) and \
+                    if self.tokenizer.bos_token and \
+                            prompt.startswith(self.tokenizer.bos_token) and \
                             not prompt.startswith(self.tokenizer.bos_token * 2) and \
                             context.startswith(self.tokenizer.bos_token * 2):
                         context = context[len(self.tokenizer.bos_token):]
@@ -301,7 +303,8 @@ class AntiSlopSampler:
                     
                     # sometimes model.generate adds an extra bos token so we'll manually clip it off.
                     # otherwise we have conflicts with the originally calculated prompt_length
-                    if prompt.startswith(self.tokenizer.bos_token) and \
+                    if self.tokenizer.bos_token and \
+                            prompt.startswith(self.tokenizer.bos_token) and \
                             not prompt.startswith(self.tokenizer.bos_token * 2) and \
                             generated_sequence[0] == self.tokenizer.bos_token_id and \
                             generated_sequence[1] == self.tokenizer.bos_token_id:
@@ -402,6 +405,8 @@ class AntiSlopSampler:
 
         # Clear variables to free up memory
         del next_token_logits, filtered_logits
+        self._clear_cpu_memory()
+
 
     def _filter_probs(self, probs: torch.FloatTensor, top_k: int, top_p: float, min_p: float) -> torch.FloatTensor:
         # Make a copy of the probabilities to ensure we do not modify the original tensor
@@ -443,6 +448,20 @@ class AntiSlopSampler:
                 display(HTML(f"<pre>{message}</pre>"))
         else:
             print(message)
+
+    def _clear_cpu_memory(self):
+        def clear_gpu_memory():
+            while True:
+                torch.cuda.empty_cache()
+                # Sleep for a certain interval (e.g., 5 minutes)
+                threading.Event().wait(300)
+
+        # Create and start the daemon thread
+        cleaner_thread = threading.Thread(target=clear_gpu_memory, daemon=True)
+        cleaner_thread.start()
+
+        # Return immediately without waiting for the thread
+        return
 
 def chat_antislop(
     model: PreTrainedModel,
