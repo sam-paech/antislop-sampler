@@ -12,7 +12,7 @@ Try the sampler here:
 
 Here it is in action (in slow mode so you can see its backtracking & revisions):
 
-https://github.com/user-attachments/assets/aafe267e-adf1-43e6-9622-5e68b08f7fb3
+https://github.com/user-attachments/assets/e289fb89-d40c-458b-9d98-118c06b28fba
 
 ### 2024-10-05 Update
 
