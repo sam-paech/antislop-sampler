@@ -48,6 +48,8 @@ Note: Only some of the settings in the chat controls will be active. Those are:
 - min p
 - max tokens
 
+![image](https://github.com/user-attachments/assets/8bcc2906-b1e1-4be0-b01b-66cf1b18a9ad)
+
 </details>
 
 Here it is in action (in slow mode so you can see its backtracking & revisions):
