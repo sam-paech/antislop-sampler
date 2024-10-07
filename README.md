@@ -9,6 +9,46 @@ Try the sampler here:
 - [Backtracking visualisation notebook](https://colab.research.google.com/drive/1tHS3tHXbZ5PWOsP-Mbk8oK35y6otBZUn?usp=sharing)
 - [Generate example notebook](https://colab.research.google.com/drive/1Rd3V4AN31cDytfmY9u80rzHXPD_dS6x9?usp=sharing)
 
+<details>
+<summary>### How to set up open-webui with the sampler</summary>
+
+### if you want to run in an isolated environment (note: open-webui requires python 3.11):
+```bash
+sudo apt install python3.11 python3.11-venv
+python3.11 -m venv open-webui
+source open-webui/bin/activate
+```
+
+# install open-webui
+```bash
+pip install open-webui
+open-webui serve
+```
+
+# start the openai compatible antislop server:
+```bash
+git clone https://github.com/sam-paech/antislop-sampler.git && cd antislop-sampler
+python3 run_api.py --model unsloth/Llama-3.2-3B-Instruct --slop_adjustments_file slop_phrase_prob_adjustments.json
+```
+
+# configure open-webui
+- browse to http://localhost:8080
+- go to admin panel --> settings --> connections
+- set the OpenAI API url to http://0.0.0.0:8000/v1
+- set password to anything (it's not used)
+- click the refresh icon to verify the connection; should see a success message
+
+Now it should be all configured! Start a new chat, select the model, and give it a try.
+
+Note: Only some of the settings in the chat controls will be active. Those are:
+- stream chat response
+- temperature
+- top k
+- top p
+- min p
+- max tokens
+
+</details>
 
 Here it is in action (in slow mode so you can see its backtracking & revisions):
 
