@@ -405,7 +405,7 @@ class AntiSlopSampler:
 
         # Clear variables to free up memory
         del next_token_logits, filtered_logits
-        self._clear_cpu_memory()
+        self._clear_gpu_memory()
 
 
     def _filter_probs(self, probs: torch.FloatTensor, top_k: int, top_p: float, min_p: float) -> torch.FloatTensor:
@@ -449,7 +449,7 @@ class AntiSlopSampler:
         else:
             print(message)
 
-    def _clear_cpu_memory(self):
+    def _clear_gpu_memory(self):
         def clear_gpu_memory():
             while True:
                 torch.cuda.empty_cache()
@@ -763,4 +763,6 @@ def _generate_antislop(
             yield tok
             num_new_tokens += 1
             if max_new_tokens is not None and num_new_tokens >= max_new_tokens:
+                del sampler
                 return
+    del sampler

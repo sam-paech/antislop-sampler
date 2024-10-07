@@ -460,7 +460,7 @@ async def completions(request: CompletionRequest, req: Request):
                 )
 
             # Decode the tokens
-            text = tokenizer.decode(generated_tokens, skip_special_tokens=False)
+            text = tokenizer.decode(generated_tokens, skip_special_tokens=True)
             logger.debug(f"Generated text: {text}")
 
             # Create the response
@@ -588,7 +588,7 @@ async def chat_completions(request: ChatCompletionRequest, req: Request):
                 )
 
             # Decode the tokens
-            text = tokenizer.decode(generated_tokens, skip_special_tokens=False)
+            text = tokenizer.decode(generated_tokens, skip_special_tokens=True)
             logger.debug(f"Generated chat text: {text}")
 
             # Create the response
