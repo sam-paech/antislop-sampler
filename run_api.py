@@ -34,6 +34,10 @@ tokenizer: Optional[PreTrainedTokenizer] = None
 DEFAULT_SLOP_ADJUSTMENTS: Dict[str, float] = {}
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+# Variables to store model metadata
+model_loaded_time: Optional[int] = None
+model_name_loaded: Optional[str] = None
+
 # Define a global asyncio.Lock to enforce single concurrency
 import asyncio
 lock = asyncio.Lock()
@@ -47,7 +51,7 @@ class CompletionRequest(BaseModel):
     temperature: Optional[float] = Field(default=1.0, ge=0.0, description="Sampling temperature")
     top_p: Optional[float] = Field(default=None, ge=0.0, le=1.0, description="Nucleus sampling probability")
     top_k: Optional[int] = Field(default=None, ge=0, description="Top-K sampling")
-    min_p: Optional[float] = Field(default=0.0, ge=0.0, le=1.0, description="Minimum probability threshold")
+    min_p: Optional[float] = Field(default=None, ge=0.0, le=1.0, description="Minimum probability threshold")
     stream: Optional[bool] = Field(default=False, description="Whether to stream back partial progress")
     slop_phrases: Optional[List[Tuple[str, float]]] = Field(
         default=None,
@@ -112,6 +116,23 @@ class ChatCompletionResponse(BaseModel):
     usage: Dict[str, int]
 
 
+# New Pydantic models for /v1/models endpoint
+
+class ModelInfo(BaseModel):
+    id: str
+    object: str = "model"
+    created: int
+    owned_by: str
+    permission: List[Any] = []
+    root: str
+    parent: Optional[str] = None
+
+
+class ModelsResponse(BaseModel):
+    object: str = "list"
+    data: List[ModelInfo]
+
+
 # Utility functions
 
 import uuid
@@ -148,6 +169,7 @@ def load_slop_adjustments(file_path: Optional[str]) -> Dict[str, float]:
 @app.on_event("startup")
 async def load_model_and_tokenizer():
     global model, tokenizer, DEFAULT_SLOP_ADJUSTMENTS, device
+    global model_loaded_time, model_name_loaded
 
     # Load configuration from environment variables
     model_name = os.getenv("MODEL_NAME", "gpt2")
@@ -231,6 +253,10 @@ async def load_model_and_tokenizer():
 
     logger.info("Model and tokenizer loaded successfully.")
 
+    # Store model metadata
+    model_loaded_time = current_timestamp()
+    model_name_loaded = model_name
+
 
 # Utility function for streaming responses
 
@@ -302,7 +328,7 @@ async def stream_tokens_sync(generator: Any, is_chat: bool = False) -> AsyncGene
                 break  # Exit the loop after handling the error
 
             # Decode the token to text
-            text = tokenizer.decode([token], skip_special_tokens=False)
+            text = tokenizer.decode([token], skip_special_tokens=True)
             logger.debug(f"Decoded token: {text}")
 
             # Prepare the data in OpenAI's streaming format
@@ -341,7 +367,7 @@ async def completions(request: CompletionRequest, req: Request):
             raise HTTPException(status_code=500, detail="Model and tokenizer are not loaded.")
 
         # Use the model specified in the request or default
-        used_model = request.model if request.model else model.config.name_or_path
+        used_model = request.model if request.model else model_name_loaded
 
         # Handle prompt as string or list
         if isinstance(request.prompt, list):
@@ -471,7 +497,7 @@ async def chat_completions(request: ChatCompletionRequest, req: Request):
             raise HTTPException(status_code=500, detail="Model and tokenizer are not loaded.")
 
         # Use the model specified in the request or default
-        used_model = request.model if request.model else model.config.name_or_path
+        used_model = request.model if request.model else model_name_loaded
 
         # Build the prompt from chat messages
         prompt = "\n".join([f"{msg.role}: {msg.content}" for msg in request.messages])
@@ -586,6 +612,38 @@ async def chat_completions(request: ChatCompletionRequest, req: Request):
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         logger.debug("Exiting /v1/chat/completions endpoint.")
+
+
+# New Endpoint: /v1/models
+@app.get("/v1/models", response_model=ModelsResponse)
+async def get_models():
+    logger.info("Models request received.")
+    try:
+        if model is None or model_name_loaded is None or model_loaded_time is None:
+            logger.error("Model is not loaded.")
+            raise HTTPException(status_code=500, detail="Model is not loaded.")
+
+        model_info = ModelInfo(
+            id=model_name_loaded,
+            created=model_loaded_time,
+            owned_by="user",  # Adjust as needed
+            permission=[],    # Can be populated with actual permissions if available
+            root=model_name_loaded,
+            parent=None
+        )
+
+        response = ModelsResponse(
+            data=[model_info]
+        )
+
+        logger.info("Models response prepared successfully.")
+        return response
+
+    except Exception as e:
+        logger.error(f"Error during models processing: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        logger.debug("Exiting /v1/models endpoint.")
 
 
 # Main function to parse arguments and start Uvicorn

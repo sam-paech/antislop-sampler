@@ -182,8 +182,7 @@ class AntiSlopSampler:
 
         Yields:
             Generator[List[int], None, None]: Yields generated token sequences.
-        """
-        
+        """        
         # Encode the prompt
         input_ids = self.tokenizer.encode(prompt, return_tensors="pt").to(self.device)
         generated_sequence = input_ids[0].tolist()
@@ -209,6 +208,9 @@ class AntiSlopSampler:
                 this_max_new_tokens = 0
             if max_new_tokens == None or this_max_new_tokens < max_new_tokens:
                 max_new_tokens = this_max_new_tokens
+        else:
+            if max_new_tokens == None:
+                max_new_tokens = 8096
 
         stopping_criteria_args = {}
         self.stopping_criteria = []
@@ -493,6 +495,7 @@ def chat_antislop(
             If streaming is True, yields generated text chunks.
             If streaming is False, returns a list of generated token IDs.
     """
+
     # Build the prompt using the provided messages
     prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
 
@@ -706,8 +709,13 @@ def _generate_antislop(
     )
 
     prompt_tokens = tokenizer.encode(prompt, add_special_tokens=False)
+    if len(prompt_tokens) == 0:
+        print('! prompt is empty')
+        return
     buffer_size = sampler.slop_phrase_handler.max_slop_phrase_length + 5
     tokens_to_wait = buffer_size
+    
+        
     last_released_position = len(prompt_tokens) - 1
     last_sequence_length = len(prompt_tokens)
 
