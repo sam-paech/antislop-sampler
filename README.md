@@ -19,19 +19,19 @@ python3.11 -m venv open-webui
 source open-webui/bin/activate
 ```
 
-# install open-webui
+### install open-webui
 ```bash
 pip install open-webui
 open-webui serve
 ```
 
-# start the openai compatible antislop server:
+### start the openai compatible antislop server:
 ```bash
 git clone https://github.com/sam-paech/antislop-sampler.git && cd antislop-sampler
 python3 run_api.py --model unsloth/Llama-3.2-3B-Instruct --slop_adjustments_file slop_phrase_prob_adjustments.json
 ```
 
-# configure open-webui
+### configure open-webui
 - browse to http://localhost:8080
 - go to admin panel --> settings --> connections
 - set the OpenAI API url to http://0.0.0.0:8000/v1
