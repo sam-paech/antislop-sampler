@@ -73,15 +73,6 @@ class SlopPhraseHandler:
         adjustment = self.slop_phrase_sequences[matched_sequence]
         matched_phrase = self.tokenizer.decode(torch.tensor(matched_sequence))
 
-        if slow_debug and False:
-            current_text = self.tokenizer.decode(generated_sequence[start_pos:start_pos + len(matched_sequence)])
-            # Add HTML formatting to display the matched_phrase in red
-            highlighted_text = f"{current_text}<span style='color: red;'>{matched_phrase}</span>"
-            
-            with inference_output:
-                inference_output.clear_output(wait=True)
-                display(HTML(f"<div style='white-space: pre-wrap;'>{highlighted_text}</div>"))
-
         # Display debug information
         debug_info = f"Replacing '{matched_phrase}'"
         self._display_debug(debug_info)
@@ -114,13 +105,6 @@ class SlopPhraseHandler:
         # Backtrack: remove tokens from the generated_sequence that are part of the disallowed sequence
         for _ in range(len(matched_sequence)):
             generated_sequence.pop()
-
-        if slow_debug and False:
-            current_text = self.tokenizer.decode(generated_sequence[self.prompt_length:])
-            with inference_output:
-                inference_output.clear_output(wait=True)
-                display(HTML(f"<div style='white-space: pre-wrap;'>{current_text}</div>"))
-            #time.sleep(debug_delay)
 
         # Clear the probs_cache ahead of start_pos since we've backtracked
         to_del = [key for key in self.probs_cache if key > start_pos]

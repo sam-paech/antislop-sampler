@@ -127,8 +127,6 @@ class AntiSlopSampler:
             # Add the exception to the output queue so it is propagated to the caller
             if not stop_event.is_set():
                 output_queue.put((None, e))  # Handle exception during streaming
-        #finally:
-        #    stop_event.set()  # Signal the thread to stop
 
         # Wait for the generation to complete or for the thread to be terminated
         thread.join()
@@ -247,7 +245,6 @@ class AntiSlopSampler:
 
             while True:            
                 if max_new_tokens is not None and len(generated_sequence) - self.prompt_length >= max_new_tokens:
-                    #print('max_new_tokens reached')
                     break
 
                 new_toks_to_generate = max_new_tokens - (len(generated_sequence) - self.prompt_length)            
@@ -292,12 +289,9 @@ class AntiSlopSampler:
                                     self.inference_output.clear_output(wait=True)
                                     
                                     display(HTML(f"<div style='white-space: pre-wrap;'>{context[self.prompt_length_chars:]}</div>"))
-                            
-                            #start = time.time()
-                            #yield self.tokenizer.encode(context, add_special_tokens=False)                            
+                         
                             self.sequence_queue.put(self.tokenizer.encode(context, add_special_tokens=False))
-                            #self.sequence_queue.put(generated_sequence)
-                            #print(time.time() - start)
+
 
                     torch.cuda.empty_cache()
 
@@ -306,15 +300,9 @@ class AntiSlopSampler:
                     if self.streamer_retval:                    
                         generated_sequence, new_logits, error = self.streamer_retval
                         if error:
-                            #yield []
                             self.generation_complete.set()
                             return
-                        
-                        #if not generated_sequence:
-                            # Model failed to return any tokens; likely an error so we'll return an empty list.
-                        #    yield []
-                        #    return
-                        
+
                         # sometimes model.generate adds an extra bos token so we'll manually clip it off.
                         # otherwise we have conflicts with the originally calculated prompt_length
                         if self.tokenizer.bos_token and \
@@ -364,7 +352,6 @@ class AntiSlopSampler:
                             with self.inference_output:
                                 self.inference_output.clear_output(wait=True)
                                 display(HTML(f"<div style='white-space: pre-wrap;'>{current_text}</div>"))
-                        #yield generated_sequence  # Yield the generated token sequence
                         self.sequence_queue.put(generated_sequence)
                     #print('downregulated token after reselection', self.slop_phrase_handler.probs_cache[current_position][:, self.json_validator.last_downregulated_token])
                     current_position = len(generated_sequence)
