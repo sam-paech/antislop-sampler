@@ -2,7 +2,7 @@ import time
 from typing import List, Dict, Tuple, Generator, Set, Union
 from threading import Thread
 import threading
-import queue
+from queue import Queue
 import torch
 from transformers import (
     PreTrainedTokenizer,
@@ -15,7 +15,6 @@ from ipywidgets import Output
 from src.validator_slop import SlopPhraseHandler, CustomSlopPhraseStoppingCriteria
 from src.validator_json import JSONValidator, JSONValidationStoppingCriteria
 from src.util import precompute_starting_tokens
-import asyncio
 
 class AntiSlopSampler:
     def __init__(
@@ -46,9 +45,6 @@ class AntiSlopSampler:
         self.downregulated_positions = {}  # Key: position, Value: set of sequences
         self.enforce_json = enforce_json
         self.antislop_enabled = antislop_enabled
-
-        self.sequence_queue = queue.Queue()
-        self.generation_complete = threading.Event()
 
         # Output widgets
         self.inference_output = inference_output
@@ -101,7 +97,7 @@ class AntiSlopSampler:
         stop_event = threading.Event()
 
         # Create a Queue to store the generation output or errors
-        output_queue = queue.Queue()
+        output_queue = Queue()
 
         # Define a function to run generation and put the result in the queue
         def generate_and_queue():            
@@ -162,7 +158,7 @@ class AntiSlopSampler:
 
 
     @torch.no_grad()
-    async def generate_stream(
+    def generate_stream(
         self,
         prompt: str,
         max_length: int = None,
@@ -171,7 +167,7 @@ class AntiSlopSampler:
         top_k: int = None,
         top_p: float = None,
         min_p: float = None,
-    ):
+    ) -> Generator[List[int], None, None]:
         """
         Generates text in a streaming fashion with custom downregulation and backtracking.
 
@@ -186,251 +182,232 @@ class AntiSlopSampler:
 
         Yields:
             Generator[List[int], None, None]: Yields generated token sequences.
-        """
-        print('generate_stream')
-        try:
-            # Encode the prompt
-            input_ids = self.tokenizer.encode(prompt, return_tensors="pt").to(self.device)
-            generated_sequence = input_ids[0].tolist()
+        """        
+        # Encode the prompt
+        input_ids = self.tokenizer.encode(prompt, return_tensors="pt").to(self.device)
+        generated_sequence = input_ids[0].tolist()
 
-            # If the prompt already came with a bos token, we don't want to add it again
-            if self.tokenizer.bos_token and \
-                    prompt.startswith(self.tokenizer.bos_token) and \
-                    not prompt.startswith(self.tokenizer.bos_token * 2) and \
-                    generated_sequence[0] == self.tokenizer.bos_token_id and \
-                    generated_sequence[1] == self.tokenizer.bos_token_id:
-                generated_sequence = generated_sequence[1:]
+        # If the prompt already came with a bos token, we don't want to add it again
+        if self.tokenizer.bos_token and \
+                prompt.startswith(self.tokenizer.bos_token) and \
+                not prompt.startswith(self.tokenizer.bos_token * 2) and \
+                generated_sequence[0] == self.tokenizer.bos_token_id and \
+                generated_sequence[1] == self.tokenizer.bos_token_id:
+            generated_sequence = generated_sequence[1:]
 
-            self.prompt_length = len(generated_sequence)
-            self.prompt_length_chars = len(prompt)
-            current_position = len(generated_sequence)  # Tracks the current position in the sequence
-            output_tokens_counter = 0
-            pad_token_id = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else self.tokenizer.eos_token_id
-            next_token_logits = None
-            filtered_logits = None
+        self.prompt_length = len(generated_sequence)
+        self.prompt_length_chars = len(prompt)
+        current_position = len(generated_sequence)  # Tracks the current position in the sequence
+        output_tokens_counter = 0
+        pad_token_id = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else self.tokenizer.eos_token_id
+        next_token_logits = None
+        filtered_logits = None
 
-            if max_length != None:
-                this_max_new_tokens = max_length - self.prompt_length
-                if this_max_new_tokens < 0:
-                    this_max_new_tokens = 0
-                if max_new_tokens == None or this_max_new_tokens < max_new_tokens:
-                    max_new_tokens = this_max_new_tokens
+        if max_length != None:
+            this_max_new_tokens = max_length - self.prompt_length
+            if this_max_new_tokens < 0:
+                this_max_new_tokens = 0
+            if max_new_tokens == None or this_max_new_tokens < max_new_tokens:
+                max_new_tokens = this_max_new_tokens
+        else:
+            if max_new_tokens == None:
+                max_new_tokens = 8096
+
+        stopping_criteria_args = {}
+        self.stopping_criteria = []
+        
+        if self.enforce_json:
+            json_stopping_criteria = JSONValidationStoppingCriteria(
+                tokenizer=self.tokenizer,
+                json_validator=self.json_validator,
+                prompt_length=self.prompt_length
+            )
+            self.stopping_criteria.append(json_stopping_criteria)
+
+        if self.antislop_enabled:
+            antislop_stopping_criteria = CustomSlopPhraseStoppingCriteria(
+                tokenizer=self.tokenizer,
+                slop_phrase_sequences=self.slop_phrase_handler.slop_phrase_sequences,
+                max_slop_phrase_length=self.slop_phrase_handler.max_slop_phrase_length,
+                previous_tokens=[]  # Initially empty
+            )
+            self.stopping_criteria.append(antislop_stopping_criteria)
+
+        if self.stopping_criteria:
+            stopping_criteria_args = {
+                "stopping_criteria": StoppingCriteriaList(self.stopping_criteria)
+            }
+        
+
+        while True:            
+            if max_new_tokens is not None and len(generated_sequence) - self.prompt_length >= max_new_tokens:
+                #print('max_new_tokens reached')
+                break
+
+            new_toks_to_generate = max_new_tokens - (len(generated_sequence) - self.prompt_length)            
+
+            current_input_ids = torch.tensor([generated_sequence], device=self.device)
+
+            regenerating = False
+
+            if current_position in self.slop_phrase_handler.probs_cache:
+                # We backtracked and want to use the cached logits
+                next_token_probs = self.slop_phrase_handler.probs_cache[current_position]
+                regenerating = True
             else:
-                if max_new_tokens == None:
-                    max_new_tokens = 8096
-
-            stopping_criteria_args = {}
-            self.stopping_criteria = []
-            
-            if self.enforce_json:
-                json_stopping_criteria = JSONValidationStoppingCriteria(
-                    tokenizer=self.tokenizer,
-                    json_validator=self.json_validator,
-                    prompt_length=self.prompt_length
-                )
-                self.stopping_criteria.append(json_stopping_criteria)
-
-            if self.antislop_enabled:
-                antislop_stopping_criteria = CustomSlopPhraseStoppingCriteria(
-                    tokenizer=self.tokenizer,
-                    slop_phrase_sequences=self.slop_phrase_handler.slop_phrase_sequences,
-                    max_slop_phrase_length=self.slop_phrase_handler.max_slop_phrase_length,
-                    previous_tokens=[]  # Initially empty
-                )
-                self.stopping_criteria.append(antislop_stopping_criteria)
-
-            if self.stopping_criteria:
-                stopping_criteria_args = {
-                    "stopping_criteria": StoppingCriteriaList(self.stopping_criteria)
-                }
-            
-
-            while True:            
-                if max_new_tokens is not None and len(generated_sequence) - self.prompt_length >= max_new_tokens:
-                    #print('max_new_tokens reached')
-                    break
-
-                new_toks_to_generate = max_new_tokens - (len(generated_sequence) - self.prompt_length)            
-
-                current_input_ids = torch.tensor([generated_sequence], device=self.device)
-
-                regenerating = False
-
-                if current_position in self.slop_phrase_handler.probs_cache:
-                    # We backtracked and want to use the cached logits
-                    next_token_probs = self.slop_phrase_handler.probs_cache[current_position]
-                    regenerating = True
-                else:
-                    context = ""
-                    #print(new_toks_to_generate)
-                    for new_text in self._generate_streaming(
-                        current_input_ids,
-                        new_toks_to_generate,
-                        temperature,
-                        min_p,
-                        top_k,
-                        top_p,
-                        pad_token_id,
-                        stopping_criteria_args
-                    ):
-                        context += new_text
-                        output_tokens_counter += 1
-
-                        # sometimes model.generate adds an extra bos token so we'll manually clip it off.
-                        # otherwise we have conflicts with the originally calculated prompt_length
-                        if self.tokenizer.bos_token and \
-                                prompt.startswith(self.tokenizer.bos_token) and \
-                                not prompt.startswith(self.tokenizer.bos_token * 2) and \
-                                context.startswith(self.tokenizer.bos_token * 2):
-                            context = context[len(self.tokenizer.bos_token):]
-                        
-                        if output_tokens_counter >= self.output_every_n_tokens:
-                            output_tokens_counter = 0
-
-                            if self.inference_output:
-                                with self.inference_output:
-                                    self.inference_output.clear_output(wait=True)
-                                    
-                                    display(HTML(f"<div style='white-space: pre-wrap;'>{context[self.prompt_length_chars:]}</div>"))
-                            
-                            #start = time.time()
-                            #yield self.tokenizer.encode(context, add_special_tokens=False)                            
-                            self.sequence_queue.put(self.tokenizer.encode(context, add_special_tokens=False))
-                            #self.sequence_queue.put(generated_sequence)
-                            #print(time.time() - start)
-
-                    torch.cuda.empty_cache()
-
-                    # sync with the returned vals in case the streaming came thru out of order
-                    # (not sure if this is necessary)
-                    if self.streamer_retval:                    
-                        generated_sequence, new_logits, error = self.streamer_retval
-                        if error:
-                            #yield []
-                            self.generation_complete.set()
-                            return
-                        
-                        #if not generated_sequence:
-                            # Model failed to return any tokens; likely an error so we'll return an empty list.
-                        #    yield []
-                        #    return
-                        
-                        # sometimes model.generate adds an extra bos token so we'll manually clip it off.
-                        # otherwise we have conflicts with the originally calculated prompt_length
-                        if self.tokenizer.bos_token and \
-                                prompt.startswith(self.tokenizer.bos_token) and \
-                                not prompt.startswith(self.tokenizer.bos_token * 2) and \
-                                generated_sequence[0] == self.tokenizer.bos_token_id and \
-                                generated_sequence[1] == self.tokenizer.bos_token_id:
-                            generated_sequence = generated_sequence[1:]
-    
-                        self.streamer_retval = None
-                    else:
-                        print('!! error missing retval from streamer')
-                        #yield []                        
-                        self.generation_complete.set()
-                        return
-
-                    if self.stopping_criteria:
-                        for criteria in self.stopping_criteria:
-                            criteria.update_previous_tokens(generated_sequence)
-                    #print(len(new_logits))
-                    for i, logit in enumerate(new_logits):
-                        self.slop_phrase_handler.probs_cache[current_position + i] = torch.softmax(logit.clone(), dim=-1)
-
-                    next_token = generated_sequence[-1]
-                    current_position = len(generated_sequence)
-
-
-                if regenerating:
-                    # Apply min_p, top-k and top-p filtering
-                    filtered_probs = self._filter_probs(next_token_probs, top_k, top_p, min_p)
-                    # Sample the next token                
-                    next_token_index = torch.multinomial(filtered_probs, num_samples=1)
-
-                    next_token = next_token_index.item()
-                    # Append the new token to the sequence
-                    generated_sequence.append(next_token)                
+                context = ""
+                #print(new_toks_to_generate)
+                for new_text in self._generate_streaming(
+                    current_input_ids,
+                    new_toks_to_generate,
+                    temperature,
+                    min_p,
+                    top_k,
+                    top_p,
+                    pad_token_id,
+                    stopping_criteria_args
+                ):
+                    context += new_text
                     output_tokens_counter += 1
 
-                    if self.stopping_criteria:
-                        for criteria in self.stopping_criteria:
-                            criteria.update_previous_tokens(generated_sequence)
-
+                    # sometimes model.generate adds an extra bos token so we'll manually clip it off.
+                    # otherwise we have conflicts with the originally calculated prompt_length
+                    if self.tokenizer.bos_token and \
+                            prompt.startswith(self.tokenizer.bos_token) and \
+                            not prompt.startswith(self.tokenizer.bos_token * 2) and \
+                            context.startswith(self.tokenizer.bos_token * 2):
+                        context = context[len(self.tokenizer.bos_token):]
+                    
                     if output_tokens_counter >= self.output_every_n_tokens:
                         output_tokens_counter = 0
-                        current_text = self.tokenizer.decode(generated_sequence[self.prompt_length:])
+
                         if self.inference_output:
                             with self.inference_output:
                                 self.inference_output.clear_output(wait=True)
-                                display(HTML(f"<div style='white-space: pre-wrap;'>{current_text}</div>"))
-                        #yield generated_sequence  # Yield the generated token sequence
-                        self.sequence_queue.put(generated_sequence)
-                    #print('downregulated token after reselection', self.slop_phrase_handler.probs_cache[current_position][:, self.json_validator.last_downregulated_token])
+                                
+                                display(HTML(f"<div style='white-space: pre-wrap;'>{context[self.prompt_length_chars:]}</div>"))
+                        
+                        yield self.tokenizer.encode(context, add_special_tokens=False)
+
+                torch.cuda.empty_cache()
+
+                # sync with the returned vals in case the streaming came thru out of order
+                # (not sure if this is necessary)
+                if self.streamer_retval:                    
+                    generated_sequence, new_logits, error = self.streamer_retval
+                    if error:
+                        yield []
+                        return
+                    #if not generated_sequence:
+                        # Model failed to return any tokens; likely an error so we'll return an empty list.
+                    #    yield []
+                    #    return
+                    
+                    # sometimes model.generate adds an extra bos token so we'll manually clip it off.
+                    # otherwise we have conflicts with the originally calculated prompt_length
+                    if self.tokenizer.bos_token and \
+                            prompt.startswith(self.tokenizer.bos_token) and \
+                            not prompt.startswith(self.tokenizer.bos_token * 2) and \
+                            generated_sequence[0] == self.tokenizer.bos_token_id and \
+                            generated_sequence[1] == self.tokenizer.bos_token_id:
+                        generated_sequence = generated_sequence[1:]
+  
+                    self.streamer_retval = None
+                else:
+                    print('!! error missing retval from streamer')
+                    yield []
+                    return
+
+                if self.stopping_criteria:
+                    for criteria in self.stopping_criteria:
+                        criteria.update_previous_tokens(generated_sequence)
+                #print(len(new_logits))
+                for i, logit in enumerate(new_logits):
+                    self.slop_phrase_handler.probs_cache[current_position + i] = torch.softmax(logit.clone(), dim=-1)
+
+                next_token = generated_sequence[-1]
+                current_position = len(generated_sequence)
+
+
+            if regenerating:
+                # Apply min_p, top-k and top-p filtering
+                filtered_probs = self._filter_probs(next_token_probs, top_k, top_p, min_p)
+                # Sample the next token                
+                next_token_index = torch.multinomial(filtered_probs, num_samples=1)
+
+                next_token = next_token_index.item()
+                # Append the new token to the sequence
+                generated_sequence.append(next_token)                
+                output_tokens_counter += 1
+
+                if self.stopping_criteria:
+                    for criteria in self.stopping_criteria:
+                        criteria.update_previous_tokens(generated_sequence)
+
+                if output_tokens_counter >= self.output_every_n_tokens:
+                    output_tokens_counter = 0
+                    current_text = self.tokenizer.decode(generated_sequence[self.prompt_length:])
+                    if self.inference_output:
+                        with self.inference_output:
+                            self.inference_output.clear_output(wait=True)
+                            display(HTML(f"<div style='white-space: pre-wrap;'>{current_text}</div>"))
+                    yield generated_sequence  # Yield the generated token sequence
+                #print('downregulated token after reselection', self.slop_phrase_handler.probs_cache[current_position][:, self.json_validator.last_downregulated_token])
+                current_position = len(generated_sequence)
+
+            if regenerating and self.slow_debug:
+                alt_token = self.tokenizer.decode(next_token, skip_special_tokens=True)
+                debug_info = f"Alternate token: {[alt_token]}"
+
+                self._display_debug(debug_info)
+                if self.slow_debug:
+                    time.sleep(self.debug_delay)
+
+
+            # Clean up the probs cache
+            if not self.enforce_json:
+                # json validation needs to keep the long range dependencies
+                # although we can probably delete the ones that aren't flagged in self.probs_cache_longrange.
+
+                to_del = [key for key in self.slop_phrase_handler.probs_cache if key < current_position - self.slop_phrase_handler.max_slop_phrase_length - 5 and not self.slop_phrase_handler.probs_cache_longrange.get(key, False)]                
+                for key in to_del:
+                    if key not in self.slop_phrase_handler.probs_cache_longrange:
+                        del self.slop_phrase_handler.probs_cache[key]
+
+
+            # Check for end-of-sequence token
+            if next_token == self.tokenizer.eos_token_id:
+                break
+
+            # JSON validation
+            if self.enforce_json:
+                result = self.json_validator.validate_json_string(generated_sequence, self.prompt_length, self.slop_phrase_handler.probs_cache)
+                if result != False:
+                    generated_sequence = result
                     current_position = len(generated_sequence)
+                    continue  # Skip the rest of this iteration and start over
 
-                if regenerating and self.slow_debug:
-                    alt_token = self.tokenizer.decode(next_token, skip_special_tokens=True)
-                    debug_info = f"Alternate token: {[alt_token]}"
-
-                    self._display_debug(debug_info)
-                    if self.slow_debug:
-                        time.sleep(self.debug_delay)
-
-
-                # Clean up the probs cache
-                if not self.enforce_json:
-                    # json validation needs to keep the long range dependencies
-                    # although we can probably delete the ones that aren't flagged in self.probs_cache_longrange.
-
-                    to_del = [key for key in self.slop_phrase_handler.probs_cache if key < current_position - self.slop_phrase_handler.max_slop_phrase_length - 5 and not self.slop_phrase_handler.probs_cache_longrange.get(key, False)]                
-                    for key in to_del:
-                        if key not in self.slop_phrase_handler.probs_cache_longrange:
-                            del self.slop_phrase_handler.probs_cache[key]
-
-
-                # Check for end-of-sequence token
-                if next_token == self.tokenizer.eos_token_id:
-                    break
-
-                # JSON validation
-                if self.enforce_json:
-                    result = self.json_validator.validate_json_string(generated_sequence, self.prompt_length, self.slop_phrase_handler.probs_cache)
-                    if result != False:
-                        generated_sequence = result
-                        current_position = len(generated_sequence)
-                        continue  # Skip the rest of this iteration and start over
-
-                # After adding the token, check for disallowed sequences
-                if self.antislop_enabled:
-                    antislop_result = self.slop_phrase_handler.deslop(generated_sequence, self.prompt_length)
-                    if antislop_result != False:
-                        generated_sequence = antislop_result
-                        current_position = len(generated_sequence)
-                        continue
+            # After adding the token, check for disallowed sequences
+            if self.antislop_enabled:
+                antislop_result = self.slop_phrase_handler.deslop(generated_sequence, self.prompt_length)
+                if antislop_result != False:
+                    generated_sequence = antislop_result
+                    current_position = len(generated_sequence)
+                    continue
 
 
 
-            # Final display of the generated text
-            final_text = self.tokenizer.decode(generated_sequence[self.prompt_length:], skip_special_tokens=False)
-            if self.inference_output:
-                with self.inference_output:
-                    self.inference_output.clear_output(wait=True)
-                    display(HTML(f"<div style='white-space: pre-wrap;'>{final_text}</div>"))
-            #yield generated_sequence
-            self.sequence_queue.put(generated_sequence)
+        # Final display of the generated text
+        final_text = self.tokenizer.decode(generated_sequence[self.prompt_length:], skip_special_tokens=False)
+        if self.inference_output:
+            with self.inference_output:
+                self.inference_output.clear_output(wait=True)
+                display(HTML(f"<div style='white-space: pre-wrap;'>{final_text}</div>"))
+        yield generated_sequence
 
-
-            # Clear variables to free up memory
-            del next_token_logits, filtered_logits
-            torch.cuda.empty_cache()
-
-            # signal end of generation
-            self.generation_complete.set()
-        except Exception as e:
-            print(e)
-            # signal end of generation
-            self.generation_complete.set()
+        # Clear variables to free up memory
+        del next_token_logits, filtered_logits
+        torch.cuda.empty_cache()
 
 
     def _filter_probs(self, probs: torch.FloatTensor, top_k: int, top_p: float, min_p: float) -> torch.FloatTensor:
@@ -499,7 +476,6 @@ def chat_antislop(
     adjustment_strength: float = 1.0,  # 1.0 is no change from the provided adjustment factors.
     device: torch.device = torch.device('cuda'),
     streaming: bool = False,
-    stream_smoothing: bool = True,
     slow_debug: bool = False,  # Add slow_debug argument for debugging
     output_every_n_tokens: int = 1,  # Control how frequently the output is updated
     debug_delay: float = 2.0,  # Delay for slow debugging mode
@@ -562,7 +538,6 @@ def chat_antislop(
         antislop_enabled=antislop_enabled,
         enforce_json=enforce_json,
         streaming=streaming,
-        stream_smoothing=stream_smoothing,
     )
     
 
@@ -580,7 +555,6 @@ def generate_antislop(
     adjustment_strength: float = 1.0,
     device: torch.device = torch.device('cuda'),
     streaming: bool = False,
-    stream_smoothing: bool = True,
     slow_debug: bool = False,  # Added slow_debug
     output_every_n_tokens: int = 1,
     debug_delay: float = 2.0,
@@ -665,8 +639,7 @@ def generate_antislop(
             debug_output=debug_output,
             enforce_json=enforce_json,
             antislop_enabled=antislop_enabled,
-            streaming=streaming,
-            stream_smoothing=stream_smoothing,
+            streaming=True
         )
     else:
         generated_tokens = []
@@ -690,16 +663,11 @@ def generate_antislop(
             debug_output=debug_output,
             enforce_json=enforce_json,
             antislop_enabled=antislop_enabled,
-            streaming=streaming,
-            stream_smoothing=stream_smoothing,            
+            streaming=True  # Always stream internally
         ):
             generated_tokens.append(token)
         return generated_tokens
 
-def simple_thread_function():
-    print("Simple thread function executed")
-    time.sleep(1)
-    print("Simple thread function completed")
 
 
 def _generate_antislop(
@@ -721,7 +689,6 @@ def _generate_antislop(
     inference_output: 'Output' = None,  # Assuming Output is defined elsewhere
     debug_output: 'Output' = None,
     streaming: bool = False,
-    stream_smoothing: bool = True,
     enforce_json: bool = False,
     antislop_enabled: bool = True,
 ) -> Generator[int, None, None]:
@@ -750,109 +717,121 @@ def _generate_antislop(
     )
 
     # Generate token stream
-    generate_kwargs = {
-        'max_length': max_length,
-        'max_new_tokens': max_new_tokens,
-        'temperature': temperature,
-        'top_k': top_k,
-        'top_p': top_p,
-        'min_p': min_p,
-    }
-
-    def run_event_loop(loop):
-        asyncio.set_event_loop(loop)
-        loop.run_forever()
-
-    # Create a new event loop
-    loop = asyncio.new_event_loop()
-
-    # Run the event loop in a separate thread
-    thread = threading.Thread(target=run_event_loop, args=(loop,), daemon=True)
-    thread.start()
-
-    # Schedule the generate_stream coroutine to run in the event loop
-    future = asyncio.run_coroutine_threadsafe(sampler.generate_stream(prompt, **generate_kwargs), loop)
+    token_stream = sampler.generate_stream(
+        prompt=prompt,
+        max_length=max_length,
+        max_new_tokens=max_new_tokens,
+        temperature=temperature,
+        top_k=top_k,
+        top_p=top_p,
+        min_p=min_p
+    )
 
     prompt_tokens = tokenizer.encode(prompt, add_special_tokens=False)
     if len(prompt_tokens) == 0:
         print('! prompt is empty')
         return
-    
-    backtracking_buffer_size = sampler.slop_phrase_handler.max_slop_phrase_length + 5
+    buffer_size = sampler.slop_phrase_handler.max_slop_phrase_length + 5
+
     last_released_position = len(prompt_tokens) - 1
 
-    if streaming and stream_smoothing:
-        # Buffer to allow bactracking and also to smooth output rate
-        temporal_buffer_size = 30
-        last_generation_time = time.time()
-        token_times = [last_generation_time] * len(prompt_tokens)
-        while True:
-            try:
-                generated_sequence = sampler.sequence_queue.get(timeout=0.01)
-            except queue.Empty:
-                if sampler.generation_complete.is_set():
-                    break
-                continue        
+    # Temporal buffering parameters
+    ema_alpha = 0.2  # Smoothing factor for EMA
+    average_token_time = 0.05  # Initial average token generation time in seconds
+    n_temporal_buffer_tokens = 8  # Number of tokens for temporal buffer
+    temporal_buffer_time = n_temporal_buffer_tokens * average_token_time  # Total time for temporal buffer
+    last_generation_time = time.time()
+    token_times = [last_generation_time] * len(prompt_tokens)
 
-            # update token times
-            if len(generated_sequence) <= len(token_times):
-                # we backtracked
-                token_times = token_times[:len(generated_sequence)-1]
+    for generated_sequence in token_stream:
+        current_time = time.time()
 
-            while len(generated_sequence) - last_released_position > backtracking_buffer_size:
-                # get the latest sequence from the queue
-                while True:
-                    try:
-                        generated_sequence = sampler.sequence_queue.get(timeout=0.001)
-                        if len(generated_sequence) <= len(token_times):
-                            # we backtracked
-                            token_times = token_times[:len(generated_sequence)-1]
-                    except queue.Empty:
-                        break
-                if sampler.generation_complete.is_set():
-                    break
+        # update token times
+        if len(generated_sequence) <= len(token_times):
+            # we backtracked
+            token_times = token_times[:len(generated_sequence)-1]
+            #token_times.append(time.time())
+        #else:
+        #    n_new_tokens = len(generated_sequence) - len(token_times)
+        #    token_times += [time.time()] * n_new_tokens
 
-                # calculate simple moving avg of last n token times
-                adjusted_last_released_pos = last_released_position - len(prompt_tokens)
-                sma_tokens = token_times[len(prompt_tokens):][adjusted_last_released_pos-temporal_buffer_size:adjusted_last_released_pos]
-                if len(sma_tokens) > 0:
-                    sma_token_time = (time.time() - sma_tokens[0]) / len(sma_tokens)
-                else:
-                    sma_token_time = 0
-                #print(sma_token_time)
+        
 
-                if len(generated_sequence) - last_released_position > backtracking_buffer_size + temporal_buffer_size:
-                    sleep_time = 0.02
-                else:
-                    sleep_time = sma_token_time
-                
-                last_released_position += 1
-                token_to_release = generated_sequence[last_released_position]
+        if False:
+            # Identify new tokens beyond the last released position
+            if len(generated_sequence) > last_released_position + 1:
+                new_tokens = generated_sequence[last_released_position + 1:]
+                num_new_tokens = len(new_tokens)
 
-                # Sleep to smooth the output
-                if sleep_time > 0:
-                    time.sleep(sleep_time)
+                # Estimate generation time per token
+                generation_time = current_time - last_generation_time
+                token_time = generation_time / num_new_tokens if num_new_tokens > 0 else 0
 
-                token_times.append(time.time())
+                # Update moving average
+                average_token_time = ema_alpha * token_time + (1 - ema_alpha) * average_token_time
+                temporal_buffer_time = n_temporal_buffer_tokens * average_token_time
+                #print(temporal_buffer_time)
 
-                # Yield the token
-                yield token_to_release
-    else:
-        # smoothing disabled        
-        while True:
-            try:
-                generated_sequence = sampler.sequence_queue.get(timeout=0.01)
-            except queue.Empty:
-                if sampler.generation_complete.is_set():
-                    break
-                continue        
+                # Update last_generation_time
+                last_generation_time = current_time
 
-            while len(generated_sequence) - last_released_position > backtracking_buffer_size:
-                last_released_position += 1
-                token_to_release = generated_sequence[last_released_position]
+            # Handle backtracking (sequence becoming shorter)
+            elif len(generated_sequence) < last_released_position + 1:
+                # Calculate how many tokens were removed from the buffer
+                # Note: last_released_position remains unchanged
+                removed_tokens = (last_released_position + 1) - len(generated_sequence)
 
-                # Yield the token
-                yield token_to_release
+
+        # Release tokens based on buffer_size and temporal buffer
+        sequence_len = len(generated_sequence)
+        while sequence_len - last_released_position > buffer_size:
+            # calculate simple moving avg of last n token times
+            adjusted_last_released_pos = last_released_position - len(prompt_tokens)
+            sma_tokens = token_times[len(prompt_tokens):][adjusted_last_released_pos-n_temporal_buffer_tokens:adjusted_last_released_pos]
+            if len(sma_tokens) > 0:
+                sma_token_time = (time.time() - sma_tokens[0]) / len(sma_tokens)
+            else:
+                sma_token_time = 0
+            temporal_buffer_time = n_temporal_buffer_tokens * sma_token_time
+            print(sma_token_time)
+
+            last_released_position += 1
+            token_to_release = generated_sequence[last_released_position]
+
+            # Determine if buffer is over or under the temporal buffer
+            n_buffered_tokens = sequence_len - last_released_position - n_temporal_buffer_tokens
+            print(n_buffered_tokens)
+            buffer_time = n_buffered_tokens * sma_token_time
+            print(buffer_time, temporal_buffer_time)
+            if buffer_time > temporal_buffer_time:
+            #if sequence_len - last_released_position > buffer_size + n_temporal_buffer_tokens:
+                # Buffer is over the temporal buffer, release at full rate with min delay
+                sleep_time = 0.02
+            else:
+                print('under buffer', temporal_buffer_time - buffer_time)
+                # Buffer is under the temporal buffer, calculate additional delay
+                # to maintain the temporal buffer
+                # Calculate required time to reach temporal buffer
+                required_time = temporal_buffer_time - buffer_time
+                # Distribute the required_time over the remaining buffered tokens
+                sleep_time = required_time / max(n_buffered_tokens, 1)
+
+                # Ensure that sleep_time is not negative
+                sleep_time = max(sleep_time, 0.0)
+                #sleep_time = sma_token_time * 2
+
+            # Sleep to smooth the output
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+
+            token_times.append(time.time())
+
+            # Yield the token
+            yield token_to_release
+            
+
+            # Update buffered tokens as one token is released
+            n_buffered_tokens = sequence_len - last_released_position - n_temporal_buffer_tokens
 
     # Release any remaining tokens after generation is complete
     if last_released_position < len(generated_sequence) - 1:
