@@ -839,7 +839,7 @@ def _generate_antislop(
 
     # Release any remaining tokens after generation is complete
     if last_released_position < len(generated_sequence) - 1:
-        print(len(generated_sequence) - last_released_position, 'to release')
+        #print(len(generated_sequence) - last_released_position, 'to release')
         for tok in generated_sequence[last_released_position + 1:]:
             # Release remaining tokens at full rate with constant delay
             yield tok
