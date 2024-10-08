@@ -184,8 +184,7 @@ class AntiSlopSampler:
 
         Yields:
             Generator[List[int], None, None]: Yields generated token sequences.
-        """
-        print('generate_stream')
+        """        
         try:
             # Encode the prompt
             input_ids = self.tokenizer.encode(prompt, return_tensors="pt").to(self.device)
