@@ -188,7 +188,8 @@ async def load_model_and_tokenizer():
         logger.info(f"Loaded {len(DEFAULT_SLOP_ADJUSTMENTS)} slop phrase adjustments.")
     except Exception as e:
         logger.error(f"Failed to load slop adjustments: {e}")
-        DEFAULT_SLOP_ADJUSTMENTS = {}
+        raise ValueError("Slop adjustments file could not be loaded. Make sure you have the right file path and file structure.")
+        
 
     logger.info(f"Using device: {device}")
 
