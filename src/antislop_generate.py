@@ -314,15 +314,13 @@ class AntiSlopSampler:
     
                         self.streamer_retval = None
                     else:
-                        print('!! error missing retval from streamer')
-                        #yield []                        
+                        print('!! error missing retval from streamer')                    
                         self.generation_complete.set()
                         return
 
                     if self.stopping_criteria:
                         for criteria in self.stopping_criteria:
                             criteria.update_previous_tokens(generated_sequence)
-                    #print(len(new_logits))
                     for i, logit in enumerate(new_logits):
                         self.slop_phrase_handler.probs_cache[current_position + i] = torch.softmax(logit.clone(), dim=-1)
 
@@ -404,7 +402,6 @@ class AntiSlopSampler:
                 with self.inference_output:
                     self.inference_output.clear_output(wait=True)
                     display(HTML(f"<div style='white-space: pre-wrap;'>{final_text}</div>"))
-            #yield generated_sequence
             self.sequence_queue.put(generated_sequence)
 
 
