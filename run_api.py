@@ -300,6 +300,8 @@ async def stream_tokens_sync(generator: Any, is_chat: bool = False) -> AsyncGene
     logger.debug("Generator thread initiated.")
 
     try:
+        tokens = []
+        text = ''
         while True:
             token = await asyncio.to_thread(q.get)
             logger.debug(f"Token retrieved from queue: {token}")
@@ -335,14 +337,20 @@ async def stream_tokens_sync(generator: Any, is_chat: bool = False) -> AsyncGene
                 break  # Exit the loop after handling the error
 
             # Decode the token to text
-            text = tokenizer.decode([token], skip_special_tokens=True)
-            logger.debug(f"Decoded token: {text}")
+            # Note: This is inefficient; we're decoding the whole sequence every time a 
+            # new token comes in. This is to handle cases where the tokeniser doesn't 
+            # prepend spaces to words. There's probably a better way to do this.
+            tokens.append(token)
+            full_text = tokenizer.decode(tokens, skip_special_tokens=True)
+            new_text = full_text[len(text):]
+            text = full_text
+            logger.debug(f"Decoded token: {new_text}")
 
             # Prepare the data in OpenAI's streaming format
             data = {
                 "choices": [
                     {
-                        "delta": {"content": text},
+                        "delta": {"content": new_text},
                         "index": 0,
                         "finish_reason": None
                     }
