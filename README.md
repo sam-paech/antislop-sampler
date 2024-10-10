@@ -157,7 +157,7 @@ For the default slop list, we computed a large list of words that are over-repre
 
 ## Why it's interesting:
 
-Samplers typically work at the token level -- but that doesn't work if want to avoid words/phrases that tokenise to >1 tokens. Elara might tokenise to ["El", "ara"], and we don't want to reduce the probs of everything beginning with "El". So, this approach waits for the whole phrase to appear, then backtracks and reduces the probabilities of all the likely tokens that will lead to that phrase being output. Nobody afaik has tried this before. It should produce better results than instructing the model to avoid words & phrases in the prompt.
+Samplers typically work at the token level -- but that doesn't work if want to avoid words/phrases that tokenise to >1 tokens. Elara might tokenise to ["El", "ara"], and we don't want to reduce the probs of everything beginning with "El". So, this approach waits for the whole phrase to appear, then backtracks and reduces the probabilities of all the likely tokens that will lead to that phrase being output. ~~Nobody afaik has tried this before.~~ [edit] It turns out exllamav2 has a banned_strings feature with same/similar implementation so I can't claim novelty. [/edit]
 
 * Disclaimers: This is only implemented in Transformers thus far. It is not well optimised. The code has come together over a few days so expect research grade code & possibly bugs.
 
