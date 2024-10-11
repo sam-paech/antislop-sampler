@@ -43,7 +43,6 @@ class AntiSlopSampler:
         self.slow_debug = slow_debug
         self.output_every_n_tokens = output_every_n_tokens
         self.debug_delay = debug_delay        
-        self.downregulated_positions = {}  # Key: position, Value: set of sequences
         self.enforce_json = enforce_json
         self.antislop_enabled = antislop_enabled
 
@@ -230,9 +229,10 @@ class AntiSlopSampler:
             if self.antislop_enabled:
                 antislop_stopping_criteria = CustomSlopPhraseStoppingCriteria(
                     tokenizer=self.tokenizer,
-                    slop_phrase_sequences=self.slop_phrase_handler.slop_phrase_sequences,
                     max_slop_phrase_length=self.slop_phrase_handler.max_slop_phrase_length,
-                    previous_tokens=[]  # Initially empty
+                    min_slop_phrase_length=self.slop_phrase_handler.min_slop_phrase_length,
+                    prompt_length=self.prompt_length,
+                    slop_phrase_prob_adjustments=self.slop_phrase_handler.slop_phrase_prob_adjustments
                 )
                 self.stopping_criteria.append(antislop_stopping_criteria)
 
@@ -317,9 +317,6 @@ class AntiSlopSampler:
                         self.generation_complete.set()
                         return
 
-                    if self.stopping_criteria:
-                        for criteria in self.stopping_criteria:
-                            criteria.update_previous_tokens(generated_sequence)
                     for i, logit in enumerate(new_logits):
                         self.slop_phrase_handler.probs_cache[current_position + i] = torch.softmax(logit.clone(), dim=-1)
 
@@ -337,10 +334,6 @@ class AntiSlopSampler:
                     # Append the new token to the sequence
                     generated_sequence.append(next_token)                
                     output_tokens_counter += 1
-
-                    if self.stopping_criteria:
-                        for criteria in self.stopping_criteria:
-                            criteria.update_previous_tokens(generated_sequence)
 
                     if output_tokens_counter >= self.output_every_n_tokens:
                         output_tokens_counter = 0
@@ -763,6 +756,7 @@ def _generate_antislop(
     
     backtracking_buffer_size = sampler.slop_phrase_handler.max_slop_phrase_length + 5
     last_released_position = len(prompt_tokens) - 1
+    generated_sequence = []
 
     if streaming and stream_smoothing:
         # Buffer to allow bactracking and also to smooth output rate

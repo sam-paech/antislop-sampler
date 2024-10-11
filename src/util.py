@@ -6,19 +6,19 @@ def precompute_starting_tokens(
 ) -> Dict[Tuple[int, ...], Set[int]]:
     starting_tokens_lookup = {}
 
-    for word in slop_phrase_prob_adjustments.keys():
+    for slop_phrase in slop_phrase_prob_adjustments.keys():
+        starting_tokens = set()
         variants = [
-            word.lower(),
-            word.capitalize(),
-            word.upper(),
-            f" {word.lower()}",
-            f" {word.capitalize()}",
-            f" {word.upper()}",
+            slop_phrase.lower(),
+            slop_phrase.capitalize(),
+            slop_phrase.upper(),
+            f" {slop_phrase.lower()}",
+            f" {slop_phrase.capitalize()}",
+            f" {slop_phrase.upper()}",
         ]
 
         for variant in variants:
             token_ids = tokenizer.encode(variant, add_special_tokens=False)
-            starting_tokens = set()
             if token_ids:
                 starting_tokens.add(token_ids[0])
                 first_token_decoded = tokenizer.decode(token_ids[0], skip_special_tokens=True)
@@ -31,6 +31,6 @@ def precompute_starting_tokens(
                     if encoded_prefix:
                         starting_tokens.add(encoded_prefix[0])
 
-                starting_tokens_lookup[tuple(token_ids)] = starting_tokens
+        starting_tokens_lookup[slop_phrase] = starting_tokens
 
     return starting_tokens_lookup

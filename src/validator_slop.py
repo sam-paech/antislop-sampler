@@ -9,6 +9,43 @@ from transformers import (
 from IPython.display import display, HTML
 from ipywidgets import Output
 
+
+# This function detects if any of the slop phrases are in the end segment of inference.
+# It is optimised using dict lookups to be more or less constant execution time regardless
+# of slop list length.
+def detect_disallowed_sequence(tokenizer: PreTrainedTokenizer,
+                                inference: str,
+                                generated_sequence: List[int],
+                                prompt_length: int,
+                                slop_phrase_prob_adjustments: Dict[str, float], 
+                                max_slop_phrase_length: int,
+                                min_slop_phrase_length: int,
+                                check_n_chars_back: int = 16 # this moves the detection window back n chars, so we can detect phrases that were completed further back
+                                ) -> Tuple[Tuple[int, ...], int]:
+    
+    inference = inference.lower()
+
+    for char_offset in range(0, check_n_chars_back):
+        for candidate_str_length in range(min_slop_phrase_length, max_slop_phrase_length + 1):
+            if candidate_str_length + char_offset > len(inference):
+                break
+            candidate_str = inference[-(candidate_str_length + char_offset):len(inference)-char_offset]
+            #print(candidate_str)
+            if candidate_str in slop_phrase_prob_adjustments:
+                # determine the token containing the beginning of the detected phrase
+                #print('looking for', candidate_str,'in decoded text')
+                for start_pos in range(len(generated_sequence)-1, prompt_length-1, -1):
+                    candidate_seq = generated_sequence[start_pos:]
+                    candidate_seq_decoded = tokenizer.decode(candidate_seq, skip_special_tokens=True).lower()
+                    #print(candidate_seq_decoded)
+                    if candidate_str in candidate_seq_decoded:
+                        #print('detected!', candidate_str, time.time() - start)
+                        return candidate_str, start_pos
+                # if we reached here, something went wrong
+                print('!! candidate_str not found after decoding')
+
+    return None, -1
+
 class SlopPhraseHandler:
     def __init__(
         self,
@@ -30,35 +67,22 @@ class SlopPhraseHandler:
         self.debug_output = debug_output
         self.debug_delay = debug_delay
 
-        self.slop_phrase_sequences = self._prepare_slop_phrase_sequences()
-        self.max_slop_phrase_length = max(len(seq) for seq in self.slop_phrase_sequences.keys()) if self.slop_phrase_sequences else 0
-        self.stopping_criteria = SlopPhraseStoppingCriteria(tokenizer, self.slop_phrase_sequences, self.max_slop_phrase_length)
-        self.downregulated_positions = {}  # Key: position, Value: set of sequences
+        self.max_slop_phrase_length = max(len(seq) for seq in self.slop_phrase_prob_adjustments.keys()) if self.slop_phrase_prob_adjustments else 0
+        self.min_slop_phrase_length = min(len(seq) for seq in self.slop_phrase_prob_adjustments.keys()) if self.slop_phrase_prob_adjustments else 0
+        #self.stopping_criteria = SlopPhraseStoppingCriteria(tokenizer, self.slop_phrase_sequences, self.max_slop_phrase_length)
         self.probs_cache = {}
         self.probs_cache_longrange = {}  # flags which positions in the logit cache we ignore during cleanup, as we want to keep some positions for long range constraint checks        
 
-    
-    def _prepare_slop_phrase_sequences(self) -> Dict[Tuple[int, ...], float]:
-        slop_phrase_sequences = {}
-        for word, prob_adjustment_factor in self.slop_phrase_prob_adjustments.items():
-            variants = [
-                word.lower(),
-                word.capitalize(),
-                word.upper(),
-                f" {word.lower()}",
-                f" {word.capitalize()}",
-                f" {word.upper()}",
-            ]
-            for variant in variants:
-                token_ids = tuple(self.tokenizer.encode(variant, add_special_tokens=False))
-                if token_ids:
-                    slop_phrase_sequences[token_ids] = prob_adjustment_factor
-        return slop_phrase_sequences
+        tmp = {}
+        for key in self.slop_phrase_prob_adjustments:
+            tmp[key.lower()] = self.slop_phrase_prob_adjustments[key]
+        self.slop_phrase_prob_adjustments = tmp
 
+    
 
     def _handle_disallowed_sequence(
         self,
-        matched_sequence: Tuple[int, ...],
+        matched_phrase: str,
         start_pos: int,
         generated_sequence: List[int],
         probs_cache: Dict[int, torch.FloatTensor],
@@ -70,8 +94,7 @@ class SlopPhraseHandler:
         debug_delay: float,
     ) -> List[int]:
         # Downregulate the relevant tokens at the start_pos
-        adjustment = self.slop_phrase_sequences[matched_sequence]
-        matched_phrase = self.tokenizer.decode(torch.tensor(matched_sequence))
+        adjustment = self.slop_phrase_prob_adjustments[matched_phrase.lower()]
 
         # Display debug information
         debug_info = f"Replacing '{matched_phrase}'"
@@ -83,27 +106,25 @@ class SlopPhraseHandler:
                 with debug_output:
                     debug_output.clear_output(wait=True)                        
 
+        #print('downregulating', [tokenizer.decode([generated_sequence[start_pos]])])
+
         # Identify starting tokens to downregulate
-        starting_tokens = self.starting_tokens_lookup.get(matched_sequence, set())
+        slop_phrase_starting_token = generated_sequence[start_pos]
+        starting_tokens = self.starting_tokens_lookup.get(matched_phrase.lower(), set())
+        starting_tokens.add(slop_phrase_starting_token)
 
         for token_id in starting_tokens:
             self.probs_cache[start_pos][:, token_id] *= adjustment ** adjustment_strength
 
-        # Record that this sequence has been downregulated at this position
-        if start_pos not in self.downregulated_positions:
-            self.downregulated_positions[start_pos] = set()
-        self.downregulated_positions[start_pos].add(matched_sequence)
-
         # Check if the starting token would still be selected after downregulation
-        slop_phrase_starting_token = generated_sequence[start_pos]
         if torch.argmax(self.probs_cache[start_pos]).item() == slop_phrase_starting_token:
             if slow_debug:
-                debug_info = f"Slop phrase '{self.tokenizer.decode(matched_sequence)}' prob was downregulated {round(1/(adjustment**adjustment_strength), 2)}x but still selected."
+                debug_info = f"Slop phrase '{matched_phrase}' prob was downregulated {round(1/(adjustment**adjustment_strength), 2)}x but still selected."
                 self._display_debug(debug_info)
             return generated_sequence
 
         # Backtrack: remove tokens from the generated_sequence that are part of the disallowed sequence
-        for _ in range(len(matched_sequence)):
+        for _ in range(len(generated_sequence) - start_pos):
             generated_sequence.pop()
 
         # Clear the probs_cache ahead of start_pos since we've backtracked
@@ -116,15 +137,25 @@ class SlopPhraseHandler:
     def deslop(self, generated_sequence, prompt_length):
         self.prompt_length = prompt_length
         # After adding the token(s), check for disallowed sequences
-        matched_sequence, start_pos = self.stopping_criteria._detect_disallowed_sequence(generated_sequence)
 
-        if matched_sequence:
-            matched_phrase = self.tokenizer.decode(torch.tensor(matched_sequence))
+        inference = self.tokenizer.decode(generated_sequence[prompt_length:], skip_special_tokens=True)
 
+        matched_phrase, start_pos = detect_disallowed_sequence(self.tokenizer,
+                                                               inference,
+                                                               generated_sequence,
+                                                               prompt_length,
+                                                               self.slop_phrase_prob_adjustments,
+                                                               self.max_slop_phrase_length,
+                                                               self.min_slop_phrase_length)
+
+        if matched_phrase:
             if self.slow_debug:
-                current_text = self.tokenizer.decode(generated_sequence[prompt_length:-len(matched_sequence)])
+                current_text = self.tokenizer.decode(generated_sequence[prompt_length:start_pos])
+                #print([current_text])
+                matched_phrase_to_display = self.tokenizer.decode(generated_sequence[start_pos:], skip_special_tokens=True)
+                #print([matched_phrase_to_display])
                 # Add HTML formatting to display the matched_phrase in red
-                highlighted_text = f"{current_text}<span style='color: red;'>{matched_phrase}</span>"
+                highlighted_text = f"{current_text}<span style='color: red;'>{matched_phrase_to_display}</span>"
                 
                 with self.inference_output:
                     self.inference_output.clear_output(wait=True)
@@ -142,7 +173,7 @@ class SlopPhraseHandler:
 
             # Handle the disallowed sequence using SlopPhraseHandler
             generated_sequence = self._handle_disallowed_sequence(
-                matched_sequence=matched_sequence,
+                matched_phrase=matched_phrase,
                 start_pos=start_pos,
                 generated_sequence=generated_sequence,
                 probs_cache=self.probs_cache,
@@ -167,41 +198,40 @@ class SlopPhraseHandler:
                 display(HTML(f"<pre>{message}</pre>"))
 
 
-class SlopPhraseStoppingCriteria:
-    def __init__(self, tokenizer: PreTrainedTokenizer, slop_phrase_sequences: Dict[Tuple[int, ...], float], max_slop_phrase_length: int):
-        self.tokenizer = tokenizer
-        self.slop_phrase_sequences = slop_phrase_sequences
-        self.max_slop_phrase_length = max_slop_phrase_length
+#class SlopPhraseStoppingCriteria:
+#    def __init__(self, tokenizer: PreTrainedTokenizer, slop_phrase_sequences: Dict[Tuple[int, ...], float], max_slop_phrase_length: int):
+#        self.tokenizer = tokenizer
+#        self.slop_phrase_sequences = slop_phrase_sequences
+#        self.max_slop_phrase_length = max_slop_phrase_length
 
-    def _detect_disallowed_sequence(self, generated_sequence: List[int]) -> Tuple[Tuple[int, ...], int]:
-        for seq_length in range(self.max_slop_phrase_length, 0, -1):            
-            if len(generated_sequence) < seq_length:
-                continue
-            candidate_sequence = tuple(generated_sequence[-seq_length:])
-            if candidate_sequence in self.slop_phrase_sequences:
-                start_pos = len(generated_sequence) - seq_length
-                return candidate_sequence, start_pos
-        return None, -1
+    
 
 
 class CustomSlopPhraseStoppingCriteria(StoppingCriteria):
-    def __init__(self, tokenizer, slop_phrase_sequences, max_slop_phrase_length, previous_tokens=None):
+    def __init__(self, tokenizer, max_slop_phrase_length, min_slop_phrase_length, prompt_length, slop_phrase_prob_adjustments):
         self.tokenizer = tokenizer
-        self.slop_phrase_sequences = slop_phrase_sequences
         self.max_slop_phrase_length = max_slop_phrase_length
-        self.previous_tokens = previous_tokens or []
+        self.min_slop_phrase_length = min_slop_phrase_length
+        self.slop_phrase_prob_adjustments = slop_phrase_prob_adjustments
+        self.prompt_length = prompt_length
 
+    # !! For some reason this isn't reliably triggered every token
+    # which means we might have output a slop phrase a token back or so.
+    # Not sure why!
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
         # Combine previous tokens with newly generated tokens
         self.previous_tokens = input_ids[0].tolist()
-        # Check only the last max_sequence_length tokens
-        for seq_length in range(self.max_slop_phrase_length, 0, -1):
-            if len(self.previous_tokens) < seq_length:
-                continue
-            candidate_sequence = tuple(self.previous_tokens[-seq_length:])
-            if candidate_sequence in self.slop_phrase_sequences:
-                return True
-        return False
 
-    def update_previous_tokens(self, new_tokens):
-        self.previous_tokens = new_tokens
+        inference = self.tokenizer.decode(self.previous_tokens[self.prompt_length:], skip_special_tokens=True)
+
+        matched_phrase, start_pos = detect_disallowed_sequence(self.tokenizer,
+                                                               inference,
+                                                               self.previous_tokens,
+                                                               self.prompt_length,
+                                                               self.slop_phrase_prob_adjustments,
+                                                               self.max_slop_phrase_length,
+                                                               self.min_slop_phrase_length)
+        if matched_phrase:
+            #print('matched', matched_phrase)
+            return True
+        return False

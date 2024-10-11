@@ -258,11 +258,10 @@ class JSONValidator:
 
 
 class JSONValidationStoppingCriteria(StoppingCriteria):
-    def __init__(self, tokenizer, json_validator, prompt_length, previous_tokens = None):
+    def __init__(self, tokenizer, json_validator, prompt_length):
         self.tokenizer = tokenizer
         self.json_validator = json_validator
         self.prompt_length = prompt_length
-        self.previous_tokens = previous_tokens or []
 
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
         self.previous_tokens = input_ids[0].tolist()
@@ -271,6 +270,3 @@ class JSONValidationStoppingCriteria(StoppingCriteria):
         result = self.json_validator._validate_json_string(self.previous_tokens, self.prompt_length, validate_only=True)
 
         return result
-
-    def update_previous_tokens(self, new_tokens):
-        self.previous_tokens = new_tokens
