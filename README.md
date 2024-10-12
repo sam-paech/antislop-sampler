@@ -14,7 +14,7 @@ Try the sampler here:
 
 <b>With koboldcpp (new!)</b>
 
-Koboldcpp now include antislop phrase banning in their latest release:
+Koboldcpp now includes antislop phrase banning in their latest release:
 https://github.com/LostRuins/koboldcpp/releases/tag/v1.76
 
 <b>With a local chat UI (open-webui):</b>
@@ -181,7 +181,7 @@ If you do implement this sampler in your thing, please let me know about it!
 
 ## Acknowledgements
 
-Turboderp was the first to implement this mechanism in exllamav2 as the "banned strings" feature. This was unknown to us at the time of creating the AntiSlop sampler, so it was birthed independently in a case of convergent evolution. Credit to them for doing it first!
+Turboderp was the first to implement this mechanism in exllamav2 as the "banned strings" feature. This was unknown to us at the time of creating the AntiSlop sampler, which was birthed independently in a case of convergent evolution. Credit to them for doing it first!
 
 ## How to Cite
 
