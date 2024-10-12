@@ -10,7 +10,14 @@ Try the sampler here:
 - [Generate example notebook](https://colab.research.google.com/drive/1Rd3V4AN31cDytfmY9u80rzHXPD_dS6x9?usp=sharing)
 
 
-### How to use the sampler with a local chat UI (open-webui)
+### How to use the sampler
+
+<b>With koboldcpp (new!)</b>
+
+Koboldcpp now include antislop phrase banning in their latest release:
+https://github.com/LostRuins/koboldcpp/releases/tag/v1.76
+
+<b>With a local chat UI (open-webui):</b>
 
 <details>
 <summary>[Click to view instructions]</summary>
@@ -98,9 +105,6 @@ It uses the same backtracking mechanism to retry invalid JSON output. It checks 
     ...
 ]
 ```
-- I discovered the sampler can squash an annoying habit of LLM writing: overuse of antitheses, e.g. `...not x, but y`, simply by downregulating the string `", not"`. Yay! I think there will be a lot of interesting life hacks to be found like this.
-- I've made some generate functions (found in `antislop_generate.py`) that you can import to deploy the sampler in your code:
-
 </details>
 
 ### chat_antislop
@@ -157,9 +161,9 @@ For the default slop list, we computed a large list of words that are over-repre
 
 ## Why it's interesting:
 
-Samplers typically work at the token level -- but that doesn't work if want to avoid words/phrases that tokenise to >1 tokens. Elara might tokenise to ["El", "ara"], and we don't want to reduce the probs of everything beginning with "El". So, this approach waits for the whole phrase to appear, then backtracks and reduces the probabilities of all the likely tokens that will lead to that phrase being output. ~~Nobody afaik has tried this before.~~ [edit] It turns out exllamav2 has a banned_strings feature with same/similar implementation so I can't claim novelty. [/edit]
+Samplers typically work at the token level -- but that doesn't work if want to avoid words/phrases that tokenise to >1 tokens. Elara might tokenise to ["El", "ara"], and we don't want to reduce the probs of everything beginning with "El". So, this approach waits for the whole phrase to appear, then backtracks and reduces the probabilities of all the likely tokens that will lead to that phrase being output. ~~Nobody afaik has tried this before.~~ [edit] It turns out exllamav2 has a banned_strings feature with same/similar implementation so we can't claim novelty. [/edit]
 
-* Disclaimers: This is only implemented in Transformers thus far. It is not well optimised. The code has come together over a few days so expect research grade code & possibly bugs.
+* Disclaimers: This is only implemented in Transformers (and now koboldcpp!) thus far. It is not well optimised. Expect research grade code & possibly bugs.
 
 
 ## What you need to implement this
@@ -174,6 +178,10 @@ If you'd like to implement this sampler in something other than transformers, he
 Unfortunately that rules out most commercial APIs since few let you specify logit biases. For inferencing engines, they will likely be a mixed bag in terms of ease of integration, as most/all samplers work per token without this weird backtracking stuff we're doing here.
 
 If you do implement this sampler in your thing, please let me know about it!
+
+## Acknowledgements
+
+Turboderp was the first to implement this mechanism in exllamav2 as the "banned strings" feature. This was unknown to us at the time of creating the AntiSlop sampler, so it was birthed independently in a case of convergent evolution. Credit to them for doing it first!
 
 ## How to Cite
 
