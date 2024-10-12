@@ -26,9 +26,9 @@ def detect_disallowed_sequence(tokenizer: PreTrainedTokenizer,
     inference = inference.lower()
 
     for char_offset in range(0, check_n_chars_back):
-        for candidate_str_length in range(min_slop_phrase_length, max_slop_phrase_length + 1):
+        for candidate_str_length in range(max_slop_phrase_length, min_slop_phrase_length - 1, -1):
             if candidate_str_length + char_offset > len(inference):
-                break
+                continue
             candidate_str = inference[-(candidate_str_length + char_offset):len(inference)-char_offset]
             #print(candidate_str)
             if candidate_str in slop_phrase_prob_adjustments:
