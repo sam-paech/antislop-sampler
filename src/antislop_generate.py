@@ -14,6 +14,8 @@ from IPython.display import display, HTML
 from ipywidgets import Output
 from src.validator_slop import SlopPhraseHandler, CustomSlopPhraseStoppingCriteria
 from src.validator_json import JSONValidator, JSONValidationStoppingCriteria
+from src.validator_regex import RegexValidator, RegexValidationStoppingCriteria
+
 from src.util import precompute_starting_tokens
 import asyncio
 
@@ -31,6 +33,7 @@ class AntiSlopSampler:
         debug_delay: float = 2.0,
         inference_output=None,
         debug_output=None,
+        regex_bans: List[str] = [],
 		enforce_json: bool = False,
         antislop_enabled: bool = True,
     ):
@@ -45,6 +48,7 @@ class AntiSlopSampler:
         self.debug_delay = debug_delay        
         self.enforce_json = enforce_json
         self.antislop_enabled = antislop_enabled
+        self.regex_bans = regex_bans or []
 
         self.sequence_queue = queue.Queue()
         self.generation_complete = threading.Event()
@@ -52,6 +56,9 @@ class AntiSlopSampler:
         # Output widgets
         self.inference_output = inference_output
         self.debug_output = debug_output
+
+        self.probs_cache = {}
+        self.probs_cache_longrange = {}  # flags which positions in the logit cache we ignore during cleanup, as we want to keep some positions for long range constraint checks        
 
         # Escaped toks used for lookups in json string repair
         self.escaped_tokens_lookup = {
@@ -65,6 +72,8 @@ class AntiSlopSampler:
         # Initialize Slop Phrase Handler
         self.slop_phrase_handler = SlopPhraseHandler(
             tokenizer=tokenizer,
+            probs_cache=self.probs_cache,
+            probs_cache_longrange=self.probs_cache_longrange,
             slop_phrase_prob_adjustments=slop_phrase_prob_adjustments,
             starting_tokens_lookup=starting_tokens_lookup,
             adjustment_strength=adjustment_strength,
@@ -73,7 +82,21 @@ class AntiSlopSampler:
             debug_output=debug_output,
             debug_delay=debug_delay
         )
-        self.json_validator = JSONValidator(tokenizer, slow_debug, debug_delay, debug_output, self.slop_phrase_handler.probs_cache_longrange)
+        self.json_validator = JSONValidator(tokenizer, slow_debug, debug_delay, debug_output, self.probs_cache_longrange)
+
+        # Initialize Regex Validator if regex patterns are provided
+        if self.regex_bans:
+            self.regex_validator = RegexValidator(
+                tokenizer=tokenizer,
+                regex_bans=self.regex_bans,
+                slow_debug=slow_debug,
+                debug_delay=debug_delay,
+                debug_output=debug_output,        
+                probs_cache_longrange=self.probs_cache_longrange
+            )
+        else:
+            self.regex_validator = None
+
         self.streamer_retval = None
 
     def _generate_streaming(self, current_input_ids, new_toks_to_generate, temperature, min_p, top_k, top_p, pad_token_id, stopping_criteria_args):
@@ -236,6 +259,16 @@ class AntiSlopSampler:
                 )
                 self.stopping_criteria.append(antislop_stopping_criteria)
 
+            # Initialize Regex Validation Stopping Criteria
+            if self.regex_validator:
+                regex_stopping_criteria = RegexValidationStoppingCriteria(
+                    tokenizer=self.tokenizer,
+                    regex_validator=self.regex_validator,
+                    prompt_length=self.prompt_length
+                )
+                self.stopping_criteria.append(regex_stopping_criteria)
+
+
             if self.stopping_criteria:
                 stopping_criteria_args = {
                     "stopping_criteria": StoppingCriteriaList(self.stopping_criteria)
@@ -252,9 +285,9 @@ class AntiSlopSampler:
 
                 regenerating = False
 
-                if current_position in self.slop_phrase_handler.probs_cache:
+                if current_position in self.probs_cache:
                     # We backtracked and want to use the cached logits
-                    next_token_probs = self.slop_phrase_handler.probs_cache[current_position]
+                    next_token_probs = self.probs_cache[current_position]
                     regenerating = True
                 else:
                     context = ""
@@ -318,7 +351,7 @@ class AntiSlopSampler:
                         return
 
                     for i, logit in enumerate(new_logits):
-                        self.slop_phrase_handler.probs_cache[current_position + i] = torch.softmax(logit.clone(), dim=-1)
+                        self.probs_cache[current_position + i] = torch.softmax(logit.clone(), dim=-1)
 
                     next_token = generated_sequence[-1]
                     current_position = len(generated_sequence)
@@ -333,6 +366,7 @@ class AntiSlopSampler:
                     next_token = next_token_index.item()
                     # Append the new token to the sequence
                     generated_sequence.append(next_token)                
+                    #print('alt token:',self.tokenizer.decode(next_token), self.probs_cache[current_position][:, next_token])
                     output_tokens_counter += 1
 
                     if output_tokens_counter >= self.output_every_n_tokens:
@@ -356,14 +390,14 @@ class AntiSlopSampler:
 
 
                 # Clean up the probs cache
-                if not self.enforce_json:
+                if not self.enforce_json and not self.regex_bans:
                     # json validation needs to keep the long range dependencies
                     # although we can probably delete the ones that aren't flagged in self.probs_cache_longrange.
-
-                    to_del = [key for key in self.slop_phrase_handler.probs_cache if key < current_position - self.slop_phrase_handler.max_slop_phrase_length - 5 and not self.slop_phrase_handler.probs_cache_longrange.get(key, False)]                
-                    for key in to_del:
-                        if key not in self.slop_phrase_handler.probs_cache_longrange:
-                            del self.slop_phrase_handler.probs_cache[key]
+                    if self.antislop_enabled:
+                        to_del = [key for key in self.probs_cache if key < current_position - self.slop_phrase_handler.max_slop_phrase_length - 5 and not self.probs_cache_longrange.get(key, False)]                
+                        for key in to_del:
+                            if key not in self.probs_cache_longrange:
+                                del self.probs_cache[key]
 
 
                 # Check for end-of-sequence token
@@ -372,7 +406,7 @@ class AntiSlopSampler:
 
                 # JSON validation
                 if self.enforce_json:
-                    result = self.json_validator.validate_json_string(generated_sequence, self.prompt_length, self.slop_phrase_handler.probs_cache)
+                    result = self.json_validator.validate_json_string(generated_sequence, self.prompt_length, self.probs_cache)
                     if result != False:
                         generated_sequence = result
                         current_position = len(generated_sequence)
@@ -383,6 +417,14 @@ class AntiSlopSampler:
                     antislop_result = self.slop_phrase_handler.deslop(generated_sequence, self.prompt_length)
                     if antislop_result != False:
                         generated_sequence = antislop_result
+                        current_position = len(generated_sequence)
+                        continue
+
+                # Initialize Regex Validation Stopping Criteria
+                if self.regex_validator:
+                    regex_result = self.regex_validator.validate_regex_matches(generated_sequence, self.prompt_length, self.probs_cache)
+                    if regex_result != False:
+                        generated_sequence = regex_result
                         current_position = len(generated_sequence)
                         continue
 
@@ -483,6 +525,7 @@ def chat_antislop(
     debug_output: Output = None,  # For visualization of debug information
     enforce_json: bool = False,
     antislop_enabled: bool = True,
+    regex_bans: List[str] = None,
 ):
     """
     Generates a chat response while avoiding overrepresented phrases (slop) with debugging features.
@@ -537,6 +580,7 @@ def chat_antislop(
         debug_output=debug_output,
         antislop_enabled=antislop_enabled,
         enforce_json=enforce_json,
+        regex_bans=regex_bans,
         streaming=streaming,
         stream_smoothing=stream_smoothing,
     )
@@ -564,6 +608,7 @@ def generate_antislop(
     debug_output: Output = None,
     enforce_json: bool = False,
     antislop_enabled: bool = True,
+    regex_bans: List[str] = None,
 ) -> Union[Generator[str, None, None], List[int]]:
     """
     Wrapper function for generate_antislop that handles both streaming and non-streaming modes.
@@ -640,6 +685,7 @@ def generate_antislop(
             inference_output=inference_output,
             debug_output=debug_output,
             enforce_json=enforce_json,
+            regex_bans=regex_bans,
             antislop_enabled=antislop_enabled,
             streaming=streaming,
             stream_smoothing=stream_smoothing,
@@ -665,6 +711,7 @@ def generate_antislop(
             inference_output=inference_output,
             debug_output=debug_output,
             enforce_json=enforce_json,
+            regex_bans=regex_bans,
             antislop_enabled=antislop_enabled,
             streaming=streaming,
             stream_smoothing=stream_smoothing,            
@@ -700,11 +747,16 @@ def _generate_antislop(
     stream_smoothing: bool = True,
     enforce_json: bool = False,
     antislop_enabled: bool = True,
+    regex_bans: List[str] = None,
 ) -> Generator[int, None, None]:
     """
     Generates text while avoiding overrepresented phrases (slop).
     This function is now always a generator with temporal buffering.
     """
+
+    if streaming and regex_bans:
+        raise ValueError("Streaming is not supported when using regex patterns.")
+
     # Precompute starting tokens for the slop phrases
     starting_tokens_lookup = precompute_starting_tokens(tokenizer, slop_phrase_prob_adjustments or {})
 
@@ -723,6 +775,7 @@ def _generate_antislop(
         debug_output=debug_output,
         enforce_json=enforce_json,
         antislop_enabled=antislop_enabled,
+        regex_bans=regex_bans,
     )
 
     # Generate token stream

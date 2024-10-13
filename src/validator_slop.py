@@ -50,6 +50,8 @@ class SlopPhraseHandler:
     def __init__(
         self,
         tokenizer: PreTrainedTokenizer,
+        probs_cache: Dict[int, List[int]],
+        probs_cache_longrange: Dict[int, bool],
         slop_phrase_prob_adjustments: Dict[str, float],
         starting_tokens_lookup: Dict[Tuple[int, ...], Set[int]],
         adjustment_strength: float,
@@ -59,6 +61,8 @@ class SlopPhraseHandler:
         debug_delay: float,
     ):
         self.tokenizer = tokenizer
+        self.probs_cache = probs_cache
+        self.probs_cache_longrange = probs_cache_longrange
         self.slop_phrase_prob_adjustments = slop_phrase_prob_adjustments
         self.starting_tokens_lookup = starting_tokens_lookup
         self.adjustment_strength = adjustment_strength
@@ -69,9 +73,7 @@ class SlopPhraseHandler:
 
         self.max_slop_phrase_length = max(len(seq) for seq in self.slop_phrase_prob_adjustments.keys()) if self.slop_phrase_prob_adjustments else 0
         self.min_slop_phrase_length = min(len(seq) for seq in self.slop_phrase_prob_adjustments.keys()) if self.slop_phrase_prob_adjustments else 0
-        #self.stopping_criteria = SlopPhraseStoppingCriteria(tokenizer, self.slop_phrase_sequences, self.max_slop_phrase_length)
-        self.probs_cache = {}
-        self.probs_cache_longrange = {}  # flags which positions in the logit cache we ignore during cleanup, as we want to keep some positions for long range constraint checks        
+        #self.stopping_criteria = SlopPhraseStoppingCriteria(tokenizer, self.slop_phrase_sequences, self.max_slop_phrase_length)        
 
         tmp = {}
         for key in self.slop_phrase_prob_adjustments:

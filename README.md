@@ -76,7 +76,21 @@ The api is very minimalist, and doesn't support concurrency. It's more geared fo
 
 This is research grade code. Meaning it probably contains bugs & is a work in progress.
 
-### 2024-10-05 Update
+
+### 2024-10-13 Update
+
+The main changes are:
+
+- Switched to string matching instead of token matching (it's more robust)
+- Added regex matching/banning
+
+The new regex_bans parameter accepts a list of regex patterns. These will be evaluated during inference, and if one of them matches, we backtrack to the first token of the matched string. From there, we ban the matched continuation and continue inference.
+
+This allows more freedom for enforcing constraints than phrase matching alone. For instance, we can prevent over-used phrasing like "not x, but y". Note that streaming is not supported when using regex bans, since we can't predict how far back we may need to backtrack.
+
+
+<details>
+<summary>### 2024-10-05 Update</summary>
 
 Refactored the code, lots of fixes.
 
@@ -89,6 +103,8 @@ Refactored the code, lots of fixes.
 Quick blurb on the JSON validator:
 
 It uses the same backtracking mechanism to retry invalid JSON output. It checks for unintended unescaped quotes in strings, and encourages the model to choose a valid continuation. This is a very common fail mode for JSON outputs. Other kinds of per-token JSON grammars will just terminate the string if they see an unescaped quote, sadly ending the profound thought the LLM was in the middle of expressing. This is better. You can also use it with high temps.
+
+</details>
 
 <details>
 <summary>### 2024-10-01 Update</summary>

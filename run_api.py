@@ -60,6 +60,7 @@ class CompletionRequest(BaseModel):
     adjustment_strength: Optional[float] = Field(default=20.0, ge=0.0, description="Strength of adjustments")
     enforce_json: Optional[bool] = Field(default=False, description="Enforce JSON formatting")
     antislop_enabled: Optional[bool] = Field(default=True, description="Enable AntiSlop functionality")
+    regex_bans: Optional[List[str]] = Field(default=False, description="Ban strings matching these regex expressions")
 
 
 class ChatCompletionMessage(BaseModel):
@@ -83,6 +84,7 @@ class ChatCompletionRequest(BaseModel):
     adjustment_strength: Optional[float] = Field(default=20.0, ge=0.0, description="Strength of adjustments")
     enforce_json: Optional[bool] = Field(default=False, description="Enforce JSON formatting")
     antislop_enabled: Optional[bool] = Field(default=True, description="Enable AntiSlop functionality")
+    regex_bans: Optional[List[str]] = Field(default=False, description="Ban strings matching these regex expressions")
 
 
 class CompletionChoice(BaseModel):
@@ -376,6 +378,10 @@ async def stream_tokens_sync(generator: Any, is_chat: bool = False) -> AsyncGene
 @app.post("/v1/completions", response_model=CompletionResponse)
 async def completions(request: CompletionRequest, req: Request):
     logger.info("Completion request received, waiting for processing...")
+
+    if request.stream and request.regex_bans:
+        raise HTTPException(status_code=500, detail="Streaming cannot be enabled when using regex bans.")
+    
     try:
         if model is None or tokenizer is None:
             logger.error("Model and tokenizer are not loaded.")
@@ -423,6 +429,7 @@ async def completions(request: CompletionRequest, req: Request):
                 debug_output=None,
                 enforce_json=request.enforce_json,
                 antislop_enabled=request.antislop_enabled,
+                regex_bans=request.regex_bans
             )
 
             async def streaming_generator():
@@ -466,6 +473,7 @@ async def completions(request: CompletionRequest, req: Request):
                     debug_output=None,
                     enforce_json=request.enforce_json,
                     antislop_enabled=request.antislop_enabled,
+                    regex_bans=request.regex_bans
                 )
 
             # Decode the tokens
@@ -506,6 +514,10 @@ async def completions(request: CompletionRequest, req: Request):
 @app.post("/v1/chat/completions", response_model=ChatCompletionResponse)
 async def chat_completions(request: ChatCompletionRequest, req: Request):
     logger.info("Chat completion request received, waiting for processing...")
+
+    if request.stream and request.regex_bans:
+        raise HTTPException(status_code=500, detail="Streaming cannot be enabled when using regex bans.")
+    
     try:
         if model is None or tokenizer is None:
             logger.error("Model and tokenizer are not loaded.")
@@ -551,6 +563,7 @@ async def chat_completions(request: ChatCompletionRequest, req: Request):
                 debug_output=None,
                 enforce_json=request.enforce_json,
                 antislop_enabled=request.antislop_enabled,
+                regex_bans=request.regex_bans
             )
 
             async def streaming_generator():
@@ -594,6 +607,7 @@ async def chat_completions(request: ChatCompletionRequest, req: Request):
                     debug_output=None,
                     enforce_json=request.enforce_json,
                     antislop_enabled=request.antislop_enabled,
+                    regex_bans=request.regex_bans
                 )
 
             # Decode the tokens
