@@ -32,7 +32,7 @@ app = FastAPI(title="AntiSlop OpenAI-Compatible API")
 model: Optional[PreTrainedModel] = None
 tokenizer: Optional[PreTrainedTokenizer] = None
 DEFAULT_SLOP_ADJUSTMENTS: Dict[str, float] = {}
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device: Optional[torch.device] = None  # Modified to allow dynamic setting
 
 # Variables to store model metadata
 model_loaded_time: Optional[int] = None
@@ -173,8 +173,24 @@ async def load_model_and_tokenizer():
     global model, tokenizer, DEFAULT_SLOP_ADJUSTMENTS, device
     global model_loaded_time, model_name_loaded
 
+    # Set device based on GPU_ID environment variable
+    gpu_id = os.getenv("GPU_ID")
+    if gpu_id is not None:
+        try:
+            gpu_id_int = int(gpu_id)
+            if torch.cuda.is_available() and gpu_id_int < torch.cuda.device_count():
+                device = torch.device(f"cuda:{gpu_id_int}")
+            else:
+                logger.warning(f"Specified GPU ID {gpu_id_int} is not available. Falling back to default GPU or CPU.")
+                device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        except ValueError:
+            logger.warning(f"Invalid GPU ID '{gpu_id}'. Falling back to default GPU or CPU.")
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    else:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
     # Load configuration from environment variables
-    model_name = os.getenv("MODEL_NAME", "gpt2")
+    model_name = os.getenv("MODEL_NAME", "")
     load_in_4bit = os.getenv("LOAD_IN_4BIT", "false").lower() == "true"
     load_in_8bit = os.getenv("LOAD_IN_8BIT", "false").lower() == "true"
     slop_adjustments_file = os.getenv("SLOP_ADJUSTMENTS_FILE", None)
@@ -191,7 +207,6 @@ async def load_model_and_tokenizer():
     except Exception as e:
         logger.error(f"Failed to load slop adjustments: {e}")
         raise ValueError("Slop adjustments file could not be loaded. Make sure you have the right file path and file structure.")
-        
 
     logger.info(f"Using device: {device}")
 
@@ -713,6 +728,12 @@ def main():
         default=8000,
         help="Port number to bind the server to."
     )
+    parser.add_argument(
+        "--gpu",
+        type=int,
+        default=None,
+        help="GPU ID to load the model on (e.g., 0, 1). Optional."
+    )
 
     args = parser.parse_args()
 
@@ -722,6 +743,8 @@ def main():
     os.environ["LOAD_IN_8BIT"] = str(args.load_in_8bit)
     if args.slop_adjustments_file:
         os.environ["SLOP_ADJUSTMENTS_FILE"] = args.slop_adjustments_file
+    if args.gpu is not None:
+        os.environ["GPU_ID"] = str(args.gpu)
 
     # Run the app using Uvicorn with single worker and single thread
     uvicorn.run(
