@@ -441,7 +441,6 @@ class AntiSlopSampler:
 
             # Clear variables to free up memory
             del next_token_logits, filtered_logits
-            torch.cuda.empty_cache()
 
             # signal end of generation
             self.generation_complete.set()
@@ -502,6 +501,38 @@ class AntiSlopSampler:
 
         # Return immediately without waiting for the thread
         return
+    
+    def cleanup(self):
+        # Clear the queue
+        while not self.sequence_queue.empty():
+            try:
+                self.sequence_queue.get_nowait()
+            except queue.Empty:
+                break
+        
+        # Clear the event
+        self.generation_complete.clear()
+
+        # Clear caches
+        self.probs_cache.clear()
+        self.probs_cache_longrange.clear()
+
+        # Clear other attributes
+        self.model = None
+        self.tokenizer = None
+        self.slop_phrase_handler = None
+        self.json_validator = None
+        self.regex_validator = None
+
+        # Clear output widgets
+        if self.inference_output:
+            self.inference_output.clear_output()
+        if self.debug_output:
+            self.debug_output.clear_output()
+
+        # Clear CUDA cache
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
 def chat_antislop(
     model: PreTrainedModel,
@@ -788,108 +819,113 @@ def _generate_antislop(
         'min_p': min_p,
     }
 
+    loop = asyncio.new_event_loop()
+    
     def run_event_loop(loop):
         asyncio.set_event_loop(loop)
-        loop.run_forever()
+        loop.run_until_complete(sampler.generate_stream(prompt, **generate_kwargs))
 
-    # Create a new event loop
-    loop = asyncio.new_event_loop()
-
-    # Run the event loop in a separate thread
     thread = threading.Thread(target=run_event_loop, args=(loop,), daemon=True)
     thread.start()
 
-    # Schedule the generate_stream coroutine to run in the event loop
-    future = asyncio.run_coroutine_threadsafe(sampler.generate_stream(prompt, **generate_kwargs), loop)
+    try:
+        prompt_tokens = tokenizer.encode(prompt, add_special_tokens=False)
+        if len(prompt_tokens) == 0:
+            print('! prompt is empty')
+            return
+        
+        backtracking_buffer_size = sampler.slop_phrase_handler.max_slop_phrase_length + 5
+        last_released_position = len(prompt_tokens) - 1
+        generated_sequence = []
 
-    prompt_tokens = tokenizer.encode(prompt, add_special_tokens=False)
-    if len(prompt_tokens) == 0:
-        print('! prompt is empty')
-        return
-    
-    backtracking_buffer_size = sampler.slop_phrase_handler.max_slop_phrase_length + 5
-    last_released_position = len(prompt_tokens) - 1
-    generated_sequence = []
-
-    if streaming and stream_smoothing:
-        # Buffer to allow bactracking and also to smooth output rate
-        temporal_buffer_size = 30
-        last_generation_time = time.time()
-        token_times = [last_generation_time] * len(prompt_tokens)
-        while True:
-            try:
-                generated_sequence = sampler.sequence_queue.get(timeout=0.01)
-            except queue.Empty:
-                if sampler.generation_complete.is_set():
-                    break
-                continue        
-
-            # update token times
-            if len(generated_sequence) <= len(token_times):
-                # we backtracked
-                token_times = token_times[:len(generated_sequence)-1]
-
-            while len(generated_sequence) - last_released_position > backtracking_buffer_size:
-                # get the latest sequence from the queue
-                while True:
-                    try:
-                        generated_sequence = sampler.sequence_queue.get(timeout=0.001)
-                        if len(generated_sequence) <= len(token_times):
-                            # we backtracked
-                            token_times = token_times[:len(generated_sequence)-1]
-                    except queue.Empty:
+        if streaming and stream_smoothing:
+            # Buffer to allow bactracking and also to smooth output rate
+            temporal_buffer_size = 30
+            last_generation_time = time.time()
+            token_times = [last_generation_time] * len(prompt_tokens)
+            while True:
+                try:
+                    generated_sequence = sampler.sequence_queue.get(timeout=0.01)
+                except queue.Empty:
+                    if sampler.generation_complete.is_set():
                         break
-                if sampler.generation_complete.is_set():
-                    break
+                    continue        
 
-                # calculate simple moving avg of last n token times
-                adjusted_last_released_pos = last_released_position - len(prompt_tokens)
-                sma_tokens = token_times[len(prompt_tokens):][adjusted_last_released_pos-temporal_buffer_size:adjusted_last_released_pos]
-                if len(sma_tokens) > 0:
-                    sma_token_time = (time.time() - sma_tokens[0]) / len(sma_tokens)
-                else:
-                    sma_token_time = 0
-                #print(sma_token_time)
+                # update token times
+                if len(generated_sequence) <= len(token_times):
+                    # we backtracked
+                    token_times = token_times[:len(generated_sequence)-1]
 
-                if len(generated_sequence) - last_released_position > backtracking_buffer_size + temporal_buffer_size:
-                    sleep_time = 0.02
-                else:
-                    sleep_time = sma_token_time
-                
-                last_released_position += 1
-                token_to_release = generated_sequence[last_released_position]
+                while len(generated_sequence) - last_released_position > backtracking_buffer_size:
+                    # get the latest sequence from the queue
+                    while True:
+                        try:
+                            generated_sequence = sampler.sequence_queue.get(timeout=0.001)
+                            if len(generated_sequence) <= len(token_times):
+                                # we backtracked
+                                token_times = token_times[:len(generated_sequence)-1]
+                        except queue.Empty:
+                            break
+                    if sampler.generation_complete.is_set():
+                        break
 
-                # Sleep to smooth the output
-                if sleep_time > 0:
-                    time.sleep(sleep_time)
+                    # calculate simple moving avg of last n token times
+                    adjusted_last_released_pos = last_released_position - len(prompt_tokens)
+                    sma_tokens = token_times[len(prompt_tokens):][adjusted_last_released_pos-temporal_buffer_size:adjusted_last_released_pos]
+                    if len(sma_tokens) > 0:
+                        sma_token_time = (time.time() - sma_tokens[0]) / len(sma_tokens)
+                    else:
+                        sma_token_time = 0
+                    #print(sma_token_time)
 
-                token_times.append(time.time())
+                    if len(generated_sequence) - last_released_position > backtracking_buffer_size + temporal_buffer_size:
+                        sleep_time = 0.02
+                    else:
+                        sleep_time = sma_token_time
+                    
+                    last_released_position += 1
+                    token_to_release = generated_sequence[last_released_position]
 
-                # Yield the token
-                yield token_to_release
-    else:
-        # smoothing disabled        
-        while True:
-            try:
-                generated_sequence = sampler.sequence_queue.get(timeout=0.01)
-            except queue.Empty:
-                if sampler.generation_complete.is_set():
-                    break
-                continue        
+                    # Sleep to smooth the output
+                    if sleep_time > 0:
+                        time.sleep(sleep_time)
 
-            while len(generated_sequence) - last_released_position > backtracking_buffer_size:
-                last_released_position += 1
-                token_to_release = generated_sequence[last_released_position]
+                    token_times.append(time.time())
 
-                # Yield the token
-                yield token_to_release
+                    # Yield the token
+                    yield token_to_release
+        else:
+            # smoothing disabled        
+            while True:
+                try:
+                    generated_sequence = sampler.sequence_queue.get(timeout=0.01)
+                except queue.Empty:
+                    if sampler.generation_complete.is_set():
+                        break
+                    continue        
 
-    # Release any remaining tokens after generation is complete
-    if last_released_position < len(generated_sequence) - 1:
-        #print(len(generated_sequence) - last_released_position, 'to release')
-        for tok in generated_sequence[last_released_position + 1:]:
-            # Release remaining tokens at full rate with constant delay
-            yield tok
-            time.sleep(0.02)  # Constant delay as per user's instruction
+                while len(generated_sequence) - last_released_position > backtracking_buffer_size:
+                    last_released_position += 1
+                    token_to_release = generated_sequence[last_released_position]
 
-    del sampler
+                    # Yield the token
+                    yield token_to_release
+
+        # Release any remaining tokens after generation is complete
+        if last_released_position < len(generated_sequence) - 1:
+            #print(len(generated_sequence) - last_released_position, 'to release')
+            for tok in generated_sequence[last_released_position + 1:]:
+                # Release remaining tokens at full rate with constant delay
+                yield tok
+                time.sleep(0.02)  # Constant delay as per user's instruction
+
+    finally:
+        # Stop the event loop
+        loop.call_soon_threadsafe(loop.stop)
+        # Wait for the thread to finish
+        thread.join()
+        # Close the loop
+        loop.close()
+        # Clean up the sampler
+        sampler.cleanup()
+        del sampler
