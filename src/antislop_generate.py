@@ -1,3 +1,5 @@
+# File: ai/antislop-sampler/src/antislop_generate.py
+
 import time
 from typing import List, Dict, Tuple, Generator, Set, Union
 from threading import Thread
@@ -8,16 +10,25 @@ from transformers import (
     PreTrainedTokenizer,
     PreTrainedModel,
     StoppingCriteriaList,
-    TextIteratorStreamer
+    TextIteratorStreamer,
+    # ADDED
+    LogitsProcessorList
+    # /ADDED
 )
 from IPython.display import display, HTML
 from ipywidgets import Output
+
 from src.validator_slop import SlopPhraseHandler, CustomSlopPhraseStoppingCriteria
 from src.validator_json import JSONValidator, JSONValidationStoppingCriteria
 from src.validator_regex import RegexValidator, RegexValidationStoppingCriteria
 
 from src.util import precompute_starting_tokens
 import asyncio
+
+# ADDED: import the custom LogitsProcessor for banning tokens
+from src.logits_processor_slop import SlopTokenBanLogitsProcessor
+# /ADDED
+
 
 class AntiSlopSampler:
     def __init__(
@@ -34,8 +45,11 @@ class AntiSlopSampler:
         inference_output=None,
         debug_output=None,
         regex_bans: List[str] = [],
-		enforce_json: bool = False,
+        enforce_json: bool = False,
         antislop_enabled: bool = True,
+        # ADDED
+        ban_slop_first_tokens: bool = False
+        # /ADDED
     ):
         self.model = model
         self.tokenizer = tokenizer
@@ -99,8 +113,26 @@ class AntiSlopSampler:
 
         self.streamer_retval = None
 
+        # ADDED: store a set of tokens that should be banned, if requested
+        self.ban_slop_first_tokens = ban_slop_first_tokens
+        if self.ban_slop_first_tokens:
+            self.slop_banned_tokens = set()
+            for phrase, tokenset in starting_tokens_lookup.items():
+                self.slop_banned_tokens.update(tokenset)
+        else:
+            self.slop_banned_tokens = set()
+        # /ADDED
+
     def _generate_streaming(self, current_input_ids, new_toks_to_generate, temperature, min_p, top_k, top_p, pad_token_id, stopping_criteria_args):
         streamer = TextIteratorStreamer(self.tokenizer, skip_special_tokens=False)
+
+        # ADDED: build our LogitsProcessorList
+        logits_processor_list = LogitsProcessorList()
+        #print(len(self.slop_banned_tokens))
+        if self.ban_slop_first_tokens and len(self.slop_banned_tokens) > 0:
+            
+            logits_processor_list.append(SlopTokenBanLogitsProcessor(self.slop_banned_tokens))
+        # /ADDED
 
         generation_kwargs = dict(
             input_ids=current_input_ids,
@@ -116,28 +148,26 @@ class AntiSlopSampler:
             return_dict_in_generate=True,
             output_logits=True,
             streamer=streamer,
-            **stopping_criteria_args
+            **stopping_criteria_args,
+            # ADDED
+            logits_processor=logits_processor_list
+            # /ADDED
         )
 
-        # Create an Event to signal thread termination
         stop_event = threading.Event()
-
-        # Create a Queue to store the generation output or errors
         output_queue = queue.Queue()
 
-        # Define a function to run generation and put the result in the queue
         def generate_and_queue():            
             try:
                 output = self.model.generate(**generation_kwargs)
                 if not stop_event.is_set():
                     output_queue.put((output, None))  # None means no exception occurred
             except Exception as e:
-                print(f"Exception during generation: {e}")  # Debug print
+                print(f"Exception during generation: {e}")
                 if not stop_event.is_set():
-                    output_queue.put((None, e))  # Put the exception in the queue
+                    output_queue.put((None, e))
                 stop_event.set()
 
-        # Start the generation in a separate thread
         thread = Thread(target=generate_and_queue)
         thread.start()
 
@@ -145,40 +175,32 @@ class AntiSlopSampler:
             for new_text in streamer:
                 yield new_text
         except Exception as e:
-            print(f"Exception during streaming: {e}")  # Debug print
-            # Add the exception to the output queue so it is propagated to the caller
+            print(f"Exception during streaming: {e}")
             if not stop_event.is_set():
-                output_queue.put((None, e))  # Handle exception during streaming
+                output_queue.put((None, e))
+            stop_event.set()
 
-        # Wait for the generation to complete or for the thread to be terminated
         thread.join()
 
-        # Initialize default empty lists for output variables
         generated_sequence = []
         new_logits = []
-        error = None  # Default error to None
+        error = None  
 
-        # Check if there's any output in the queue
         if not output_queue.empty():
             generation_output, error = output_queue.get()
 
-            # Check if an error occurred during generation or streaming
             if error:
                 print(f"Generation or streaming failed: {error}")
             else:
-                # Extract logits and sequence from the generation output
                 new_logits = generation_output.logits
                 generated_sequence = generation_output.sequences[0].tolist()
 
-        # Add final debug information for empty output
         if not generated_sequence:
             print("Warning: Generated sequence is empty.")
         if not new_logits:
             print("Warning: Logits are empty.")
 
-        # Return the generated sequence, logits, and any error
         self.streamer_retval = (generated_sequence, new_logits, error)
-
 
 
     @torch.no_grad()
@@ -192,27 +214,10 @@ class AntiSlopSampler:
         top_p: float = None,
         min_p: float = None,
     ):
-        """
-        Generates text in a streaming fashion with custom downregulation and backtracking.
-
-        Args:
-            prompt (str): The initial text prompt.
-            max_length (int, optional): The maximum length of the generated text.
-            max_new_tokens (int, optional): The maximum number of new tokens to generate.
-            temperature (float): Sampling temperature.
-            top_k (int): Top-k filtering.
-            top_p (float): Top-p (nucleus) filtering.
-            min_p (float): Minimum probability filtering.
-
-        Yields:
-            Generator[List[int], None, None]: Yields generated token sequences.
-        """        
         try:
-            # Encode the prompt
             input_ids = self.tokenizer.encode(prompt, return_tensors="pt").to(self.device)
             generated_sequence = input_ids[0].tolist()
 
-            # If the prompt already came with a bos token, we don't want to add it again
             if self.tokenizer.bos_token and \
                     prompt.startswith(self.tokenizer.bos_token) and \
                     not prompt.startswith(self.tokenizer.bos_token * 2) and \
@@ -222,7 +227,7 @@ class AntiSlopSampler:
 
             self.prompt_length = len(generated_sequence)
             self.prompt_length_chars = len(prompt)
-            current_position = len(generated_sequence)  # Tracks the current position in the sequence
+            current_position = len(generated_sequence)
             output_tokens_counter = 0
             pad_token_id = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else self.tokenizer.eos_token_id
             next_token_logits = None
@@ -259,7 +264,6 @@ class AntiSlopSampler:
                 )
                 self.stopping_criteria.append(antislop_stopping_criteria)
 
-            # Initialize Regex Validation Stopping Criteria
             if self.regex_validator:
                 regex_stopping_criteria = RegexValidationStoppingCriteria(
                     tokenizer=self.tokenizer,
@@ -286,12 +290,10 @@ class AntiSlopSampler:
                 regenerating = False
 
                 if current_position in self.probs_cache:
-                    # We backtracked and want to use the cached logits
                     next_token_probs = self.probs_cache[current_position]
                     regenerating = True
                 else:
                     context = ""
-                    #print(new_toks_to_generate)
                     for new_text in self._generate_streaming(
                         current_input_ids,
                         new_toks_to_generate,
@@ -305,8 +307,6 @@ class AntiSlopSampler:
                         context += new_text
                         output_tokens_counter += 1
 
-                        # sometimes model.generate adds an extra bos token so we'll manually clip it off.
-                        # otherwise we have conflicts with the originally calculated prompt_length
                         if self.tokenizer.bos_token and \
                                 prompt.startswith(self.tokenizer.bos_token) and \
                                 not prompt.startswith(self.tokenizer.bos_token * 2) and \
@@ -319,24 +319,18 @@ class AntiSlopSampler:
                             if self.inference_output:
                                 with self.inference_output:
                                     self.inference_output.clear_output(wait=True)
-                                    
                                     display(HTML(f"<div style='white-space: pre-wrap;'>{context[self.prompt_length_chars:]}</div>"))
                          
                             self.sequence_queue.put(self.tokenizer.encode(context, add_special_tokens=False))
 
-
                     torch.cuda.empty_cache()
 
-                    # sync with the returned vals in case the streaming came thru out of order
-                    # (not sure if this is necessary)
                     if self.streamer_retval:                    
                         generated_sequence, new_logits, error = self.streamer_retval
                         if error:
                             self.generation_complete.set()
                             return
 
-                        # sometimes model.generate adds an extra bos token so we'll manually clip it off.
-                        # otherwise we have conflicts with the originally calculated prompt_length
                         if self.tokenizer.bos_token and \
                                 prompt.startswith(self.tokenizer.bos_token) and \
                                 not prompt.startswith(self.tokenizer.bos_token * 2) and \
@@ -358,15 +352,10 @@ class AntiSlopSampler:
 
 
                 if regenerating:
-                    # Apply min_p, top-k and top-p filtering
                     filtered_probs = self._filter_probs(next_token_probs, top_k, top_p, min_p)
-                    # Sample the next token                
                     next_token_index = torch.multinomial(filtered_probs, num_samples=1)
-
                     next_token = next_token_index.item()
-                    # Append the new token to the sequence
                     generated_sequence.append(next_token)                
-                    #print('alt token:',self.tokenizer.decode(next_token), self.probs_cache[current_position][:, next_token])
                     output_tokens_counter += 1
 
                     if output_tokens_counter >= self.output_every_n_tokens:
@@ -377,42 +366,32 @@ class AntiSlopSampler:
                                 self.inference_output.clear_output(wait=True)
                                 display(HTML(f"<div style='white-space: pre-wrap;'>{current_text}</div>"))
                         self.sequence_queue.put(generated_sequence)
-                    #print('downregulated token after reselection', self.slop_phrase_handler.probs_cache[current_position][:, self.json_validator.last_downregulated_token])
                     current_position = len(generated_sequence)
 
                 if regenerating and self.slow_debug:
                     alt_token = self.tokenizer.decode(next_token, skip_special_tokens=True)
                     debug_info = f"Alternate token: {[alt_token]}"
-
                     self._display_debug(debug_info)
                     if self.slow_debug:
                         time.sleep(self.debug_delay)
 
-
-                # Clean up the probs cache
                 if not self.enforce_json and not self.regex_bans:
-                    # json validation needs to keep the long range dependencies
-                    # although we can probably delete the ones that aren't flagged in self.probs_cache_longrange.
                     if self.antislop_enabled:
                         to_del = [key for key in self.probs_cache if key < current_position - self.slop_phrase_handler.max_slop_phrase_length - 5 and not self.probs_cache_longrange.get(key, False)]                
                         for key in to_del:
                             if key not in self.probs_cache_longrange:
                                 del self.probs_cache[key]
 
-
-                # Check for end-of-sequence token
                 if next_token == self.tokenizer.eos_token_id:
                     break
 
-                # JSON validation
                 if self.enforce_json:
                     result = self.json_validator.validate_json_string(generated_sequence, self.prompt_length, self.probs_cache)
                     if result != False:
                         generated_sequence = result
                         current_position = len(generated_sequence)
-                        continue  # Skip the rest of this iteration and start over
+                        continue
 
-                # After adding the token, check for disallowed sequences
                 if self.antislop_enabled:
                     antislop_result = self.slop_phrase_handler.deslop(generated_sequence, self.prompt_length)
                     if antislop_result != False:
@@ -420,7 +399,6 @@ class AntiSlopSampler:
                         current_position = len(generated_sequence)
                         continue
 
-                # Initialize Regex Validation Stopping Criteria
                 if self.regex_validator:
                     regex_result = self.regex_validator.validate_regex_matches(generated_sequence, self.prompt_length, self.probs_cache)
                     if regex_result != False:
@@ -428,9 +406,6 @@ class AntiSlopSampler:
                         current_position = len(generated_sequence)
                         continue
 
-
-
-            # Final display of the generated text
             final_text = self.tokenizer.decode(generated_sequence[self.prompt_length:], skip_special_tokens=False)
             if self.inference_output:
                 with self.inference_output:
@@ -438,23 +413,18 @@ class AntiSlopSampler:
                     display(HTML(f"<div style='white-space: pre-wrap;'>{final_text}</div>"))
             self.sequence_queue.put(generated_sequence)
 
-
-            # Clear variables to free up memory
             del next_token_logits, filtered_logits
-
-            # signal end of generation
             self.generation_complete.set()
         except Exception as e:
             print(e)
-            # signal end of generation
             self.generation_complete.set()
 
 
     def _filter_probs(self, probs: torch.FloatTensor, top_k: int, top_p: float, min_p: float) -> torch.FloatTensor:
-        # Make a copy of the probabilities to ensure we do not modify the original tensor
+        # Original code for re-sampling or re-ranking if needed.
+        # Called only when regenerating from the probs_cache, not every step.
         probs = probs.clone()
 
-        # Apply min_p filtering
         if min_p is not None:
             top_prob, _ = torch.max(probs, dim=-1)
             scaled_min_p = min_p * top_prob
@@ -478,12 +448,14 @@ class AntiSlopSampler:
             )
             probs = probs.masked_fill(indices_to_remove, 0)
 
+        # We do NOT ban tokens here, because that is handled by the SlopTokenBanLogitsProcessor
+        # at each step during generation.
+
+        probs_sum = probs.sum(dim=-1, keepdim=True)
+        probs = torch.where(probs_sum > 0, probs / probs_sum, probs)
         return probs
 
     def _display_debug(self, message: str):
-        """
-        Displays debug information in the debug_output widget.
-        """
         if self.debug_output:
             with self.debug_output:
                 self.debug_output.clear_output(wait=True)
@@ -495,44 +467,35 @@ class AntiSlopSampler:
         def clear_gpu_memory():        
             torch.cuda.empty_cache()            
 
-        # Create and start the daemon thread
         cleaner_thread = threading.Thread(target=clear_gpu_memory, daemon=True)
         cleaner_thread.start()
-
-        # Return immediately without waiting for the thread
         return
     
     def cleanup(self):
-        # Clear the queue
         while not self.sequence_queue.empty():
             try:
                 self.sequence_queue.get_nowait()
             except queue.Empty:
                 break
         
-        # Clear the event
         self.generation_complete.clear()
-
-        # Clear caches
         self.probs_cache.clear()
         self.probs_cache_longrange.clear()
 
-        # Clear other attributes
         self.model = None
         self.tokenizer = None
         self.slop_phrase_handler = None
         self.json_validator = None
         self.regex_validator = None
 
-        # Clear output widgets
         if self.inference_output:
             self.inference_output.clear_output()
         if self.debug_output:
             self.debug_output.clear_output()
 
-        # Clear CUDA cache
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+
 
 def chat_antislop(
     model: PreTrainedModel,
@@ -545,18 +508,21 @@ def chat_antislop(
     top_p: float = None,
     min_p: float = None,
     slop_phrase_prob_adjustments: Dict[str, float] = None,
-    adjustment_strength: float = 1.0,  # 1.0 is no change from the provided adjustment factors.
+    adjustment_strength: float = 1.0,
     device: torch.device = torch.device('cuda'),
     streaming: bool = False,
     stream_smoothing: bool = True,
-    slow_debug: bool = False,  # Add slow_debug argument for debugging
-    output_every_n_tokens: int = 1,  # Control how frequently the output is updated
-    debug_delay: float = 2.0,  # Delay for slow debugging mode
-    inference_output: Output = None,  # For visualization during generation
-    debug_output: Output = None,  # For visualization of debug information
+    slow_debug: bool = False,
+    output_every_n_tokens: int = 1,
+    debug_delay: float = 2.0,
+    inference_output: Output = None,
+    debug_output: Output = None,
     enforce_json: bool = False,
     antislop_enabled: bool = True,
     regex_bans: List[str] = None,
+    # ADDED
+    ban_slop_first_tokens: bool = False
+    # /ADDED
 ):
     """
     Generates a chat response while avoiding overrepresented phrases (slop) with debugging features.
@@ -581,14 +547,13 @@ def chat_antislop(
         debug_delay (float, optional): Time in seconds to pause during slow debug steps.
         inference_output (Output, optional): For visualization during generation.
         debug_output (Output, optional): For visualization of debug information.
+        ban_slop_first_tokens (bool, optional): If True, ban the first tokens from slop phrases using a LogitsProcessor.
 
     Returns:
         Union[Generator[str, None, None], List[int]]:
             If streaming is True, yields generated text chunks.
             If streaming is False, returns a list of generated token IDs.
     """
-
-    # Build the prompt using the provided messages
     prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
 
     return generate_antislop(
@@ -614,6 +579,9 @@ def chat_antislop(
         regex_bans=regex_bans,
         streaming=streaming,
         stream_smoothing=stream_smoothing,
+        # ADDED
+        ban_slop_first_tokens=ban_slop_first_tokens
+        # /ADDED
     )
     
 
@@ -632,7 +600,7 @@ def generate_antislop(
     device: torch.device = torch.device('cuda'),
     streaming: bool = False,
     stream_smoothing: bool = True,
-    slow_debug: bool = False,  # Added slow_debug
+    slow_debug: bool = False,
     output_every_n_tokens: int = 1,
     debug_delay: float = 2.0,
     inference_output: Output = None,
@@ -640,11 +608,13 @@ def generate_antislop(
     enforce_json: bool = False,
     antislop_enabled: bool = True,
     regex_bans: List[str] = None,
+    # ADDED
+    ban_slop_first_tokens: bool = False
+    # /ADDED
 ) -> Union[Generator[str, None, None], List[int]]:
     """
     Wrapper function for generate_antislop that handles both streaming and non-streaming modes.
     """
-    # Type checking and validation of input arguments
     if not isinstance(prompt, str):
         raise TypeError("prompt must be a string")
     if max_length is not None and not isinstance(max_length, int):
@@ -668,7 +638,6 @@ def generate_antislop(
     if not isinstance(streaming, bool):
         raise TypeError("streaming must be a boolean")
 
-    # Value validation
     if max_length is not None and max_length <= 0:
         raise ValueError("max_length must be positive")
     if max_new_tokens is not None and max_new_tokens <= 0:
@@ -696,6 +665,9 @@ def generate_antislop(
             if not isinstance(adjustment, (int, float)):
                 raise TypeError("All values in slop_phrase_prob_adjustments must be floats")
 
+    if streaming and regex_bans:
+        raise ValueError("Streaming is not supported when using regex patterns.")
+
     if streaming:
         return _generate_antislop(
             model=model,
@@ -710,7 +682,7 @@ def generate_antislop(
             slop_phrase_prob_adjustments=slop_phrase_prob_adjustments,
             adjustment_strength=adjustment_strength,
             device=device,
-            slow_debug=slow_debug,  # Pass slow_debug to support detailed debug output
+            slow_debug=slow_debug,
             output_every_n_tokens=output_every_n_tokens,
             debug_delay=debug_delay,
             inference_output=inference_output,
@@ -720,6 +692,9 @@ def generate_antislop(
             antislop_enabled=antislop_enabled,
             streaming=streaming,
             stream_smoothing=stream_smoothing,
+            # ADDED
+            ban_slop_first_tokens=ban_slop_first_tokens
+            # /ADDED
         )
     else:
         generated_tokens = []
@@ -736,7 +711,7 @@ def generate_antislop(
             slop_phrase_prob_adjustments=slop_phrase_prob_adjustments,
             adjustment_strength=adjustment_strength,
             device=device,
-            slow_debug=slow_debug,  # Pass slow_debug to support detailed debug output
+            slow_debug=slow_debug,
             output_every_n_tokens=output_every_n_tokens,
             debug_delay=debug_delay,
             inference_output=inference_output,
@@ -745,10 +720,14 @@ def generate_antislop(
             regex_bans=regex_bans,
             antislop_enabled=antislop_enabled,
             streaming=streaming,
-            stream_smoothing=stream_smoothing,            
+            stream_smoothing=stream_smoothing,
+            # ADDED
+            ban_slop_first_tokens=ban_slop_first_tokens
+            # /ADDED
         ):
             generated_tokens.append(token)
         return generated_tokens
+
 
 def simple_thread_function():
     print("Simple thread function executed")
@@ -769,16 +748,19 @@ def _generate_antislop(
     slop_phrase_prob_adjustments: Dict[str, float] = None,
     adjustment_strength: float = 1.0,
     device: torch.device = torch.device('cuda'),
-    slow_debug: bool = False,  # Added slow_debug
+    slow_debug: bool = False,
     output_every_n_tokens: int = 1,
     debug_delay: float = 2.0,
-    inference_output: 'Output' = None,  # Assuming Output is defined elsewhere
+    inference_output: 'Output' = None,
     debug_output: 'Output' = None,
     streaming: bool = False,
     stream_smoothing: bool = True,
     enforce_json: bool = False,
     antislop_enabled: bool = True,
     regex_bans: List[str] = None,
+    # ADDED
+    ban_slop_first_tokens: bool = False
+    # /ADDED
 ) -> Generator[int, None, None]:
     """
     Generates text while avoiding overrepresented phrases (slop).
@@ -799,7 +781,7 @@ def _generate_antislop(
         starting_tokens_lookup=starting_tokens_lookup,
         adjustment_strength=adjustment_strength,
         device=device,
-        slow_debug=slow_debug,  # Enable slow debugging
+        slow_debug=slow_debug,
         output_every_n_tokens=output_every_n_tokens,
         debug_delay=debug_delay,
         inference_output=inference_output,
@@ -807,9 +789,11 @@ def _generate_antislop(
         enforce_json=enforce_json,
         antislop_enabled=antislop_enabled,
         regex_bans=regex_bans,
+        # ADDED
+        ban_slop_first_tokens=ban_slop_first_tokens
+        # /ADDED
     )
 
-    # Generate token stream
     generate_kwargs = {
         'max_length': max_length,
         'max_new_tokens': max_new_tokens,
@@ -839,7 +823,6 @@ def _generate_antislop(
         generated_sequence = []
 
         if streaming and stream_smoothing:
-            # Buffer to allow bactracking and also to smooth output rate
             temporal_buffer_size = 30
             last_generation_time = time.time()
             token_times = [last_generation_time] * len(prompt_tokens)
@@ -851,32 +834,27 @@ def _generate_antislop(
                         break
                     continue        
 
-                # update token times
                 if len(generated_sequence) <= len(token_times):
-                    # we backtracked
                     token_times = token_times[:len(generated_sequence)-1]
 
                 while len(generated_sequence) - last_released_position > backtracking_buffer_size:
-                    # get the latest sequence from the queue
                     while True:
                         try:
-                            generated_sequence = sampler.sequence_queue.get(timeout=0.001)
-                            if len(generated_sequence) <= len(token_times):
-                                # we backtracked
-                                token_times = token_times[:len(generated_sequence)-1]
+                            gen_seq2 = sampler.sequence_queue.get(timeout=0.001)
+                            if len(gen_seq2) <= len(token_times):
+                                token_times = token_times[:len(gen_seq2)-1]
+                            generated_sequence = gen_seq2
                         except queue.Empty:
                             break
                     if sampler.generation_complete.is_set():
                         break
 
-                    # calculate simple moving avg of last n token times
                     adjusted_last_released_pos = last_released_position - len(prompt_tokens)
                     sma_tokens = token_times[len(prompt_tokens):][adjusted_last_released_pos-temporal_buffer_size:adjusted_last_released_pos]
                     if len(sma_tokens) > 0:
                         sma_token_time = (time.time() - sma_tokens[0]) / len(sma_tokens)
                     else:
                         sma_token_time = 0
-                    #print(sma_token_time)
 
                     if len(generated_sequence) - last_released_position > backtracking_buffer_size + temporal_buffer_size:
                         sleep_time = 0.02
@@ -886,16 +864,12 @@ def _generate_antislop(
                     last_released_position += 1
                     token_to_release = generated_sequence[last_released_position]
 
-                    # Sleep to smooth the output
                     if sleep_time > 0:
                         time.sleep(sleep_time)
 
                     token_times.append(time.time())
-
-                    # Yield the token
                     yield token_to_release
         else:
-            # smoothing disabled        
             while True:
                 try:
                     generated_sequence = sampler.sequence_queue.get(timeout=0.01)
@@ -907,25 +881,16 @@ def _generate_antislop(
                 while len(generated_sequence) - last_released_position > backtracking_buffer_size:
                     last_released_position += 1
                     token_to_release = generated_sequence[last_released_position]
-
-                    # Yield the token
                     yield token_to_release
 
-        # Release any remaining tokens after generation is complete
         if last_released_position < len(generated_sequence) - 1:
-            #print(len(generated_sequence) - last_released_position, 'to release')
             for tok in generated_sequence[last_released_position + 1:]:
-                # Release remaining tokens at full rate with constant delay
                 yield tok
-                time.sleep(0.02)  # Constant delay as per user's instruction
+                time.sleep(0.02)
 
     finally:
-        # Stop the event loop
         loop.call_soon_threadsafe(loop.stop)
-        # Wait for the thread to finish
         thread.join()
-        # Close the loop
         loop.close()
-        # Clean up the sampler
         sampler.cleanup()
         del sampler
