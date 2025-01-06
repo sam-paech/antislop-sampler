@@ -771,7 +771,8 @@ def _generate_antislop(
         raise ValueError("Streaming is not supported when using regex patterns.")
 
     # Precompute starting tokens for the slop phrases
-    starting_tokens_lookup = precompute_starting_tokens(tokenizer, slop_phrase_prob_adjustments or {})
+    starting_tokens_lookup = precompute_starting_tokens(tokenizer, slop_phrase_prob_adjustments or {}, ban_slop_first_tokens)
+    print(starting_tokens_lookup)
 
     # Initialize the sampler
     sampler = AntiSlopSampler(

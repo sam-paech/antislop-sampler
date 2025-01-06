@@ -2,7 +2,7 @@ from typing import List, Dict, Tuple, Generator, Set, Union
 from transformers import PreTrainedTokenizer
 
 def precompute_starting_tokens(
-    tokenizer: PreTrainedTokenizer, slop_phrase_prob_adjustments: Dict[str, float]
+    tokenizer: PreTrainedTokenizer, slop_phrase_prob_adjustments: Dict[str, float], ban_slop_first_tokens: bool
 ) -> Dict[Tuple[int, ...], Set[int]]:
     starting_tokens_lookup = {}
 
@@ -21,15 +21,17 @@ def precompute_starting_tokens(
             token_ids = tokenizer.encode(variant, add_special_tokens=False)
             if token_ids:
                 starting_tokens.add(token_ids[0])
-                first_token_decoded = tokenizer.decode(token_ids[0], skip_special_tokens=True)
 
-                for i in range(len(first_token_decoded) - 1):
-                    prefix = first_token_decoded[:-(i + 1)]
-                    if prefix == ' ':
-                        continue
-                    encoded_prefix = tokenizer.encode(prefix, add_special_tokens=False)
-                    if encoded_prefix:
-                        starting_tokens.add(encoded_prefix[0])
+                if not ban_slop_first_tokens:
+                    first_token_decoded = tokenizer.decode(token_ids[0], skip_special_tokens=True)
+
+                    for i in range(len(first_token_decoded) - 1):
+                        prefix = first_token_decoded[:-(i + 1)]
+                        if prefix == ' ':
+                            continue
+                        encoded_prefix = tokenizer.encode(prefix, add_special_tokens=False)
+                        if encoded_prefix:
+                            starting_tokens.add(encoded_prefix[0])
 
         starting_tokens_lookup[slop_phrase] = starting_tokens
 
