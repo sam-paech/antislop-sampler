@@ -443,8 +443,8 @@ async def completions(request: CompletionRequest, req: Request):
                 inference_output=None,
                 debug_output=None,
                 enforce_json=request.enforce_json,
-                antislop_enabled=True, #request.antislop_enabled,
-                ban_slop_first_tokens=False,
+                antislop_enabled=False, #request.antislop_enabled,
+                ban_slop_first_tokens=True,
                 regex_bans=request.regex_bans
             )
 
@@ -488,8 +488,8 @@ async def completions(request: CompletionRequest, req: Request):
                     inference_output=None,
                     debug_output=None,
                     enforce_json=request.enforce_json,
-                    antislop_enabled=True, #request.antislop_enabled,
-                    ban_slop_first_tokens=False,
+                    antislop_enabled=False, #request.antislop_enabled,
+                    ban_slop_first_tokens=True,
                     regex_bans=request.regex_bans
                 )
 
@@ -579,8 +579,8 @@ async def chat_completions(request: ChatCompletionRequest, req: Request):
                 inference_output=None,
                 debug_output=None,
                 enforce_json=request.enforce_json,
-                antislop_enabled=True, #request.antislop_enabled,
-                ban_slop_first_tokens=False,
+                antislop_enabled=False, #request.antislop_enabled,
+                ban_slop_first_tokens=True,
                 regex_bans=request.regex_bans
             )
 
@@ -624,8 +624,8 @@ async def chat_completions(request: ChatCompletionRequest, req: Request):
                     inference_output=None,
                     debug_output=None,
                     enforce_json=request.enforce_json,
-                    antislop_enabled=True, #request.antislop_enabled,
-                    ban_slop_first_tokens=False,
+                    antislop_enabled=False, #request.antislop_enabled,
+                    ban_slop_first_tokens=True,
                     regex_bans=request.regex_bans
                 )
 
