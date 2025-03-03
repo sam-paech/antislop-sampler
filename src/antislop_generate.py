@@ -450,9 +450,46 @@ class AntiSlopSampler:
             self.generation_complete.set()
 
 
-    def _filter_probs(self, probs: torch.FloatTensor, top_k: int, top_p: float, min_p: float) -> torch.FloatTensor:
+    def _filter_probs(
+        self, 
+        probs: torch.FloatTensor, 
+        top_k: int, 
+        top_p: float, 
+        min_p: float, 
+        repetition_penalty: float = 1.0, 
+        presence_penalty: float = 0.0, 
+        frequency_penalty: float = 0.0,
+        generated_tokens: List[int] = None,
+        no_repeat_ngram_size: int = 1
+    ) -> torch.FloatTensor:
         # Make a copy of the probabilities to ensure we do not modify the original tensor
         probs = probs.clone()
+
+        # Apply repetition penalty
+        if repetition_penalty != 1.0 and generated_tokens is not None:
+            for token in set(generated_tokens):
+                probs[:, token] /= repetition_penalty
+
+        # Apply presence penalty
+        if presence_penalty != 0.0 and generated_tokens is not None:
+            for token in set(generated_tokens):
+                probs[:, token] -= presence_penalty
+
+        # Apply frequency penalty
+        if frequency_penalty != 0.0 and generated_tokens is not None:
+            token_counts = {token: generated_tokens.count(token) for token in set(generated_tokens)}
+            for token, count in token_counts.items():
+                probs[:, token] -= frequency_penalty * count
+
+        # Apply no repeat ngram penalty
+        if no_repeat_ngram_size > 0 and generated_tokens is not None:
+            ngram_set = set()
+            for i in range(len(generated_tokens) - no_repeat_ngram_size + 1):
+                ngram = tuple(generated_tokens[i:i + no_repeat_ngram_size])
+                ngram_set.add(ngram)
+            for ngram in ngram_set:
+                if len(ngram) == no_repeat_ngram_size:
+                    probs[:, ngram[-1]] = 0
 
         # Apply min_p filtering
         if min_p is not None:
@@ -460,12 +497,14 @@ class AntiSlopSampler:
             scaled_min_p = min_p * top_prob
             probs = torch.where(probs < scaled_min_p, 0, probs)
 
+        # Apply top_k filtering
         if top_k is not None and top_k > 0:
             top_k = min(top_k, probs.size(-1))
             top_k_probs, _ = torch.topk(probs, top_k)
             min_top_k = top_k_probs[:, -1].unsqueeze(-1)
             probs = torch.where(probs < min_top_k, 0, probs)
 
+        # Apply top_p filtering
         if top_p is not None and top_p < 1.0:
             sorted_probs, sorted_indices = torch.sort(probs, descending=True)
             cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
