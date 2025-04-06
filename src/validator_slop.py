@@ -200,15 +200,6 @@ class SlopPhraseHandler:
                 display(HTML(f"<pre>{message}</pre>"))
 
 
-#class SlopPhraseStoppingCriteria:
-#    def __init__(self, tokenizer: PreTrainedTokenizer, slop_phrase_sequences: Dict[Tuple[int, ...], float], max_slop_phrase_length: int):
-#        self.tokenizer = tokenizer
-#        self.slop_phrase_sequences = slop_phrase_sequences
-#        self.max_slop_phrase_length = max_slop_phrase_length
-
-    
-
-
 class CustomSlopPhraseStoppingCriteria(StoppingCriteria):
     def __init__(self, tokenizer, max_slop_phrase_length, min_slop_phrase_length, prompt_length, slop_phrase_prob_adjustments):
         self.tokenizer = tokenizer
