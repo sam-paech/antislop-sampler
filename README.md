@@ -201,14 +201,16 @@ Turboderp was the first to implement this mechanism in exllamav2 as the "banned 
 
 ## How to Cite
 
-A paper is in the works, hang tight.
+Our work has been accepted at ICLR 2026!
 
 ```
-@misc{paech2024antislop,
-      title={antislop-sampler},
-      author={Samuel J. Paech},
-      year={2024},
-      howpublished={\url{https://github.com/sam-paech/antislop-sampler}},
-      note={GitHub repository}
+@misc{paech2025antislopcomprehensiveframeworkidentifying,
+      title={Antislop: A Comprehensive Framework for Identifying and Eliminating Repetitive Patterns in Language Models}, 
+      author={Samuel Paech and Allen Roush and Judah Goldfeder and Ravid Shwartz-Ziv},
+      year={2025},
+      eprint={2510.15061},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG},
+      url={https://arxiv.org/abs/2510.15061}, 
 }
 ```
