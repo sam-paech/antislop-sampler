@@ -53,7 +53,7 @@ class SlopPhraseHandler:
         probs_cache: Dict[int, List[int]],
         probs_cache_longrange: Dict[int, bool],
         slop_phrase_prob_adjustments: Dict[str, float],
-        starting_tokens_lookup: Dict[Tuple[int, ...], Set[int]],
+        starting_tokens_lookup: Dict[str, Set[int]],
         adjustment_strength: float,
         slow_debug: bool,
         inference_output: Output | None,
